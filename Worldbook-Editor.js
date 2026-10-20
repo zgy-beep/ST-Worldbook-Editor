@@ -1,0 +1,1711 @@
+// 世界书编辑器 v0.5 —— 酒馆助手脚本
+// 安装：酒馆助手 → 脚本库 → 新建脚本 → 粘贴全部内容 → 启用
+// 打开：魔法棒（扩展菜单）里的「世界书编辑器」，或给脚本添加名为「世界书编辑器」的按钮
+// 界面：基于 SillyTavern NVUI Kit v2.2.0（面板布局标准 + top-layer 浮层），首次打开时从 CDN 按需加载样式与 API
+(() => {
+  const W = window.parent, D = W.document;
+  try { W.__wbeTeardown && W.__wbeTeardown(); } catch { /* 忽略 */ }
+  $('#wbe-root,#wbe-layer,#wbe-style,#wbe-menu', D).remove();
+  $(D).off('keydown.wbe');
+
+  // ---------- NVUI Kit 按需加载（README §2.1.3 方式 C：酒馆助手单文件脚本） ----------
+  const CDN = 'https://cdn.jsdelivr.net/gh/zgy-beep/ui-kit@v2.2.0';
+  let NVUI = null;
+  function loadCss(id, href) {
+    return new Promise(res => {
+      if (D.getElementById(id)) return res();
+      const link = D.createElement('link');
+      link.id = id; link.rel = 'stylesheet'; link.href = href;
+      link.onload = link.onerror = () => res();
+      D.head.appendChild(link);
+      setTimeout(res, 5000);
+    });
+  }
+  async function ensureNVUI() {
+    if (NVUI) return NVUI;
+    await Promise.all([
+      loadCss('nvui-css-tokens', `${CDN}/tokens.css`),
+      loadCss('nvui-css-components', `${CDN}/components.css`),
+    ]);
+    if (!W.NVUI || typeof W.NVUI.createPanel !== 'function') {
+      await new Promise((res, rej) => {
+        const s = D.createElement('script');
+        s.id = 'nvui-js-api'; s.src = `${CDN}/nvui-api.js`;
+        s.onload = res; s.onerror = () => rej(new Error('NVUI Kit 加载失败，请检查网络后重试'));
+        D.head.appendChild(s);
+      });
+    }
+    NVUI = W.NVUI;
+    return NVUI;
+  }
+  // 操作反馈走 NVUI 吐司（top-layer，能显示在面板之上）；Kit 未加载时回退 toastr
+  const toast = {
+    show(m, type, icon) { NVUI ? NVUI.showToast({ message: m, type, icon }) : toastr[type === 'danger' ? 'error' : type || 'info'](m); },
+    success(m) { toast.show(m, 'success', 'fa-solid fa-circle-check'); },
+    error(m) { toast.show(m, 'danger', 'fa-solid fa-circle-exclamation'); },
+    warning(m) { toast.show(m, 'warn', 'fa-solid fa-triangle-exclamation'); },
+    info(m) { toast.show(m, 'info', 'fa-solid fa-circle-info'); },
+  };
+
+  const POS = {
+    before_character_definition: '角色定义前', after_character_definition: '角色定义后',
+    before_example_messages: '示例前', after_example_messages: '示例后',
+    before_author_note: '作者注释前', after_author_note: '作者注释后', at_depth: '@深度',
+  };
+  const LEGACY_POS_MAP = {
+    0: 'before_character_definition', 1: 'after_character_definition',
+    2: 'before_example_messages', 3: 'after_example_messages',
+    4: 'before_author_note', 5: 'after_author_note', 6: 'at_depth',
+  };
+  const POS_TO_NUM = {
+    before_character_definition: 0, after_character_definition: 1,
+    before_example_messages: 2, after_example_messages: 3,
+    before_author_note: 4, after_author_note: 5, at_depth: 6,
+  };
+  const zhCollator = new Intl.Collator('zh');
+  // 类型：[名称, 行配色类]；配色映射到 Kit 语义令牌（info/ok/accent），不硬编码颜色
+  const TYPE = { constant: ['常驻', 'is-constant'], selective: ['关键词', 'is-selective'], vectorized: ['向量', 'is-vectorized'] };
+  const PRESETS = [
+    ['润色', '润色文风：理顺句子，替换生硬和重复的表达，不改变任何设定事实'],
+    ['精简', '精简压缩内容：删除冗余、重复和空泛描写，保留全部关键信息，篇幅约压缩到一半'],
+    ['扩写', '扩写细节：补充具体可感的细节（动作、感官、数字、例子），不与原设定矛盾'],
+    ['补关键词', '为每个条目补全触发关键词：包含别称、简称、常见称呼和英文名，保留已有关键词；不要用「他」「这个」等泛用词'],
+    ['统一格式', '统一为「项目：内容」的紧凑格式，每个要点单独一行，各条目格式保持一致'],
+    ['第三人称', '统一改为第三人称客观叙述，不出现「你」，保留 {{user}}、{{char}} 等宏原样'],
+    ['去AI腔', '改写得更自然：去掉套话、排比、空泛抒情和比喻堆砌，用具体细节替代，信息保持不变'],
+    ['翻译成英文', '把内容翻译成自然流畅的英文，专有名词保留原文并在首次出现时括注；关键词保留原文并补充英文关键词'],
+    ['补全空缺', '对内容过于简略的条目补充必要的设定细节（身份、特征、关系、限制等），不要改动已有信息'],
+    ['拆分设定', '把下面的设定文本拆分成多个条目，每个条目只讲一个主题，并配好关键词：\n', 'new'],
+    ['冲突体检', '审查选定条目与全书其他设定是否存在逻辑冲突、死循环、时间线矛盾或设定吃书，指出矛盾条目与修改建议：\n'],
+  ];
+  const TABS = [
+    ['entries', '条目', 'fa-book'],
+    ['ai', 'AI', 'fa-wand-magic-sparkles'],
+    ['tool', '工具', 'fa-toolbox'],
+    ['set', '设置', 'fa-gear'],
+  ];
+  const S = {
+    books: [], book: '', entries: [], sel: null, checked: new Set(), q: '', flt: 'all', groupFlt: 'all', sort: 'idx', tab: 'entries', view: 'edit', dirty: false, undo: [], models: [],
+    tool: { find: '', rep: '', re: false, probe: '', f: { content: true, keys: false, name: false }, aiConflicts: [] },
+    ai: { instr: '', scope: 'cur', f: { content: true, keys: true, name: false }, ctx: true, results: [], busy: false, cancel: false, status: '' },
+  };
+  let root = null, panel = null, closeBtnEl = null, built = false;
+  let capKey = null, capClick = null;
+  const CFG_KEY = 'wbe_settings_v1';
+  const CFG = Object.assign({ mode: 'st', apiurl: '', key: '', model: '', temp: 0.7, maxTokens: 4096, style: '', presets: [] },
+    (() => { try { return JSON.parse(W.localStorage.getItem(CFG_KEY) || '{}'); } catch { return {}; } })());
+  const saveCfg = () => { try { W.localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); } catch { toast.error('设置保存失败'); } };
+  if (CFG.sort) S.sort = CFG.sort;
+  if (CFG.flt) S.flt = CFG.flt;
+  if (CFG.groupFlt) S.groupFlt = CFG.groupFlt;
+  S.limit = 300;
+
+  // ---------- 字段适配：兼容「扁平」与「strategy/position 嵌套」两种条目结构 ----------
+  const isNew = e => !!e && typeof e.position === 'object' && e.position !== null;
+  const norm = { keys: v => (Array.isArray(v) ? v : String(v ?? '').split(/[,，\n]/)).map(s => String(s).trim()).filter(Boolean) };
+  const allGroups = () => [...new Set(S.entries.map(e => A.group(e)).filter(Boolean))].sort((a, b) => zhCollator.compare(a, b));
+  const A = {
+    name: e => e.name ?? e.comment ?? '',
+    enabled: e => (typeof e.enabled === 'boolean' ? e.enabled : !e.disable),
+    keys: e => (e.strategy?.keys ?? e.key ?? e.keys ?? []).map(String),
+    keysSec: e => (e.strategy?.keys_secondary?.keys ?? e.keysecondary ?? []).map(String),
+    secLogic: e => (e.strategy?.keys_secondary?.logic ?? ({ 0: 'and_any', 1: 'not_all', 2: 'not_any', 3: 'and_all' }[e.selectiveLogic]) ?? 'and_any'),
+    type: e => e.strategy?.type ?? (e.constant ? 'constant' : e.vectorized ? 'vectorized' : e.type ?? 'selective'),
+    pos: e => {
+      const raw = isNew(e) ? e.position?.type : e.position;
+      return LEGACY_POS_MAP[raw] ?? (raw ?? '');
+    },
+    depth: e => (isNew(e) ? e.position?.depth : e.depth) ?? 0,
+    order: e => (isNew(e) ? e.position?.order : e.order) ?? 0,
+    prob: e => e.probability ?? 100,
+    group: e => String(e.group ?? '').trim(),
+  };
+  function patch(e, c) {
+    const p = { uid: e.uid }, n = isNew(e);
+    if ('name' in c) p[n ? 'name' : 'comment'] = c.name;
+    if ('enabled' in c) {
+      p.enabled = c.enabled;
+      if (!n) p.disable = !c.enabled;
+    }
+    if ('content' in c) p.content = c.content;
+    if ('prob' in c) p.probability = c.prob;
+    if ('group' in c) p.group = c.group;
+    if ('type' in c) {
+      if (n) {
+        (p.strategy ??= {}).type = c.type;
+      } else {
+        p.type = c.type;
+        p.constant = c.type === 'constant';
+        p.selective = c.type === 'selective';
+        p.vectorized = c.type === 'vectorized';
+      }
+    }
+    if ('keys' in c) n ? ((p.strategy ??= {}).keys = c.keys) : (p.key = c.keys);
+    if ('keysSec' in c || 'secLogic' in c) {
+      const kSec = 'keysSec' in c ? c.keysSec : A.keysSec(e);
+      const sLog = 'secLogic' in c ? c.secLogic : A.secLogic(e);
+      if (n) {
+        (p.strategy ??= {}).keys_secondary = { logic: sLog, keys: kSec };
+      } else {
+        p.keysecondary = kSec;
+        p.selectiveLogic = { and_any: 0, not_all: 1, not_any: 2, and_all: 3 }[sLog] ?? 0;
+      }
+    }
+    const m = { pos: 'type', depth: 'depth', order: 'order' };
+    for (const k in m) {
+      if (!(k in c)) continue;
+      if (n) {
+        (p.position ??= {})[m[k]] = c[k];
+      } else {
+        if (k === 'pos') {
+          p.position = (typeof e.position === 'number' && c.pos in POS_TO_NUM) ? POS_TO_NUM[c.pos] : c.pos;
+        } else {
+          p[k] = c[k];
+        }
+      }
+    }
+    return p;
+  }
+  function mk(c) {
+    const n = S.entries.length ? isNew(S.entries[0]) : true, t = c.type in TYPE ? c.type : 'selective';
+    const base = {
+      name: c.name || '新条目', content: c.content || '', enabled: true, group: c.group || '',
+      probability: c.prob ?? 100
+    };
+    if (n) {
+      return {
+        ...base,
+        strategy: {
+          type: t,
+          keys: c.keys || [],
+          keys_secondary: { logic: c.secLogic || 'and_any', keys: c.keysSec || [] },
+          scan_depth: 'same_as_global'
+        },
+        position: { type: c.pos || 'after_character_definition', depth: c.depth || 0, order: c.order || 100, role: 'system' }
+      };
+    } else {
+      const legacyPos = typeof c.pos === 'number' ? c.pos : (POS_TO_NUM[c.pos] ?? 1);
+      return {
+        comment: base.name, content: base.content, enabled: true, disable: false,
+        constant: t === 'constant', selective: t === 'selective', vectorized: t === 'vectorized', type: t,
+        key: c.keys || [], group: base.group,
+        keysecondary: c.keysSec || [], selectiveLogic: { and_any: 0, not_all: 1, not_any: 2, and_all: 3 }[c.secLogic] ?? 0,
+        position: legacyPos, depth: c.depth || 0, order: c.order || 100, probability: base.probability
+      };
+    }
+  }
+
+  // ---------- CSV 导入导出核心引擎 (RFC 4180 / Excel 兼容) ----------
+  const CSV = {
+    stringify(entries) {
+      const headers = ['UID', '标题', '类型', '启用', '关键词', '次要关键词', '次要逻辑', '分组', '位置', '深度', '顺序', '概率', '正文'];
+      const escCol = val => {
+        const s = String(val ?? '');
+        return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const rows = entries.map(e => [
+        e.uid,
+        A.name(e),
+        (TYPE[A.type(e)] || [])[0] || '关键词',
+        A.enabled(e) ? 'TRUE' : 'FALSE',
+        A.keys(e).join('; '),
+        A.keysSec(e).join('; '),
+        A.secLogic(e),
+        A.group(e),
+        POS[A.pos(e)] || A.pos(e) || '',
+        A.depth(e),
+        A.order(e),
+        A.prob(e),
+        e.content || ''
+      ].map(escCol).join(','));
+      return '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+    },
+    parse(text) {
+      text = text.replace(/^\uFEFF/, '');
+      const rows = [];
+      let curRow = [], curVal = '', inQuotes = false;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i], next = text[i + 1];
+        if (inQuotes) {
+          if (c === '"' && next === '"') { curVal += '"'; i++; }
+          else if (c === '"') { inQuotes = false; }
+          else { curVal += c; }
+        } else {
+          if (c === '"') { inQuotes = true; }
+          else if (c === ',') { curRow.push(curVal); curVal = ''; }
+          else if (c === '\r' && next === '\n') { curRow.push(curVal); rows.push(curRow); curRow = []; curVal = ''; i++; }
+          else if (c === '\n' || c === '\r') { curRow.push(curVal); rows.push(curRow); curRow = []; curVal = ''; }
+          else { curVal += c; }
+        }
+      }
+      if (curVal || curRow.length) { curRow.push(curVal); rows.push(curRow); }
+      if (rows.length < 2) return [];
+
+      const head = rows[0].map(h => h.trim().toLowerCase());
+      const findCol = names => {
+        let idx = head.findIndex(h => names.some(n => h === n));
+        if (idx >= 0) return idx;
+        return head.findIndex(h => names.some(n => h.includes(n)));
+      };
+      const cKeysSec = findCol(['次要关键词', '次要', 'secondary']);
+      const cKeys = findCol(['主要关键词', '关键词', 'keys', 'keywords', 'key', '触发']);
+      const cSecLogic = findCol(['次要逻辑', '逻辑', 'logic']);
+      const cName = findCol(['标题', 'title', 'name', 'comment']);
+      const cContent = findCol(['正文', '内容', 'content', 'text']);
+      const cGroup = findCol(['分组', '分类', 'group', 'category']);
+      const cDepth = findCol(['深度', 'depth']);
+      const cOrder = findCol(['顺序', '优先级', 'order']);
+      const cProb = findCol(['概率', 'prob', 'probability']);
+      const cType = findCol(['类型', 'type']);
+
+      return rows.slice(1).filter(r => r.length > 1 && (r[cName] || r[cContent])).map(r => {
+        const name = (r[cName] || '新条目').trim();
+        const content = r[cContent] || '';
+        const keys = norm.keys(r[cKeys] ? r[cKeys].replace(/[;；]/g, ',') : []);
+        const keysSec = norm.keys(r[cKeysSec] ? r[cKeysSec].replace(/[;；]/g, ',') : []);
+        const group = (r[cGroup] || '').trim();
+        const rawType = (r[cType] || '').trim();
+        const type = rawType.includes('常驻') || rawType === 'constant' ? 'constant' : rawType.includes('向量') || rawType === 'vectorized' ? 'vectorized' : 'selective';
+        const depth = cDepth >= 0 && !isNaN(+r[cDepth]) ? +r[cDepth] : 0;
+        const order = cOrder >= 0 && !isNaN(+r[cOrder]) ? +r[cOrder] : 100;
+        const prob = cProb >= 0 && !isNaN(+r[cProb]) ? Math.min(100, Math.max(0, +r[cProb])) : 100;
+        const secLogic = (r[cSecLogic] || '').trim() || 'and_any';
+        return { name, content, keys, keysSec, secLogic, group, type, depth, order, prob };
+      });
+    }
+  };
+
+  // ---------- 工具 ----------
+  let isRendering = false, isSaving = false, tokTimer = null;
+  const esc = s => String(s ?? '').replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+  const ico = c => `<i class="fa-solid ${c}" aria-hidden="true"></i>`;
+  const tok = s => { s = s || ''; const c = (s.match(/[一-鿿]/g) || []).length; return Math.round(c * 1.3 + (s.length - c) / 3.5); };
+  const TK = new WeakMap();
+  const tokE = e => { let v = TK.get(e); if (v == null) TK.set(e, (v = tok(e.content))); return v; };
+  const cur = () => S.entries.find(e => String(e.uid) === String(S.sel));
+  const picked = () => S.entries.filter(e => S.checked.has(e.uid));
+  const hit = (k, t, tLower) => {
+    if (!k || !t) return false;
+    const m = k.match(/^\/(.+)\/([gimsuy]*)$/);
+    if (!m) return (tLower !== undefined ? tLower : t.toLowerCase()).includes(k.toLowerCase());
+    if (/(\+|\*|\{[0-9, ]+\})\s*\)?\s*(\+|\*|\{[0-9, ]+\})/.test(m[1])) {
+      console.warn('[WBE] 拦截潜在 ReDoS 高危正则:', m[1]);
+      return false;
+    }
+    try { return new RegExp(m[1], m[2]).test(t); } catch { return false; }
+  };
+  const guard = () => !S.dirty || confirm('有未保存的修改，确定放弃？');
+  const setDirty = v => { S.dirty = v; $('#wbe-dot', root).toggle(v); };
+  const askNum = l => { const v = prompt(l); return v === null || v.trim() === '' || isNaN(+v) ? null : +v; };
+  const field = (l, i) => `<label class="wbe-field"><span>${l}</span>${i}</label>`;
+
+  // ---------- API 统一兼容层（向下兼容 getLorebook* 与现代 getWorldbook*） ----------
+  const getTH = () => window.TavernHelper || W.TavernHelper || {};
+  async function apiGetBooks() {
+    const th = getTH();
+    try {
+      if (typeof th.getWorldbookNames === 'function') return await th.getWorldbookNames();
+      if (typeof getWorldbookNames === 'function') return await getWorldbookNames();
+      if (typeof th.getLorebooks === 'function') return await th.getLorebooks();
+      if (typeof getLorebooks === 'function') return await getLorebooks();
+    } catch (e) { console.warn('[WBE] apiGetBooks error:', e); }
+    return [];
+  }
+  async function apiGetEntries(book) {
+    if (!book) return [];
+    const th = getTH();
+    try {
+      if (typeof th.getWorldbook === 'function') return await th.getWorldbook(book);
+      if (typeof getWorldbook === 'function') return await getWorldbook(book);
+      if (typeof th.getLorebookEntries === 'function') return await th.getLorebookEntries(book);
+      if (typeof getLorebookEntries === 'function') return await getLorebookEntries(book);
+    } catch (e) { console.warn('[WBE] apiGetEntries error:', e); }
+    return [];
+  }
+  async function apiSetEntries(book, entries) {
+    const th = getTH();
+    if (typeof th.setLorebookEntries === 'function') return await th.setLorebookEntries(book, entries);
+    if (typeof setLorebookEntries === 'function') return await setLorebookEntries(book, entries);
+    if (typeof th.updateWorldbookWith === 'function') {
+      return await th.updateWorldbookWith(book, curList => {
+        for (const item of entries) {
+          const target = curList.find(e => String(e.uid) === String(item.uid));
+          if (target) Object.assign(target, item);
+        }
+        return curList;
+      });
+    }
+    throw new Error('未找到更新世界书条目的接口 (setLorebookEntries / updateWorldbookWith)');
+  }
+  async function apiCreateEntries(book, entries) {
+    const th = getTH();
+    if (typeof th.createWorldbookEntries === 'function') return await th.createWorldbookEntries(book, entries);
+    if (typeof createWorldbookEntries === 'function') return await createWorldbookEntries(book, entries);
+    if (typeof th.createLorebookEntries === 'function') return await th.createLorebookEntries(book, entries);
+    if (typeof createLorebookEntries === 'function') return await createLorebookEntries(book, entries);
+    throw new Error('未找到新增世界书条目的接口 (createWorldbookEntries / createLorebookEntries)');
+  }
+  async function apiDeleteEntries(book, uids) {
+    const uidSet = new Set(uids.map(u => String(u)));
+    const th = getTH();
+    if (typeof th.deleteWorldbookEntries === 'function') return await th.deleteWorldbookEntries(book, e => uidSet.has(String(e.uid)));
+    if (typeof deleteWorldbookEntries === 'function') return await deleteWorldbookEntries(book, uids);
+    if (typeof th.deleteLorebookEntries === 'function') return await th.deleteLorebookEntries(book, uids);
+    if (typeof deleteLorebookEntries === 'function') return await deleteLorebookEntries(book, uids);
+    throw new Error('未找到删除世界书条目的接口 (deleteWorldbookEntries / deleteLorebookEntries)');
+  }
+  async function apiCreateBook(name) {
+    const th = getTH();
+    if (typeof th.createWorldbook === 'function') return await th.createWorldbook(name);
+    if (typeof createWorldbook === 'function') return await createWorldbook(name);
+    if (typeof th.createLorebook === 'function') return await th.createLorebook(name);
+    if (typeof createLorebook === 'function') return await createLorebook(name);
+    throw new Error('未找到创建世界书的接口 (createWorldbook / createLorebook)');
+  }
+  async function apiDeleteBook(name) {
+    const th = getTH();
+    if (typeof th.deleteWorldbook === 'function') return await th.deleteWorldbook(name);
+    if (typeof deleteWorldbook === 'function') return await deleteWorldbook(name);
+    if (typeof th.deleteLorebook === 'function') return await th.deleteLorebook(name);
+    if (typeof deleteLorebook === 'function') return await deleteLorebook(name);
+    throw new Error('未找到删除世界书的接口 (deleteWorldbook / deleteLorebook)');
+  }
+
+  // ---------- 数据读写 ----------
+  async function loadBooks() {
+    const books = await apiGetBooks();
+    S.books = Array.isArray(books) ? books : [];
+    if (!S.book && CFG.lastBook) S.book = CFG.lastBook;
+    if (!S.books.includes(S.book)) S.book = S.books[0] || '';
+    await loadEntries();
+  }
+  async function loadEntries(keep) {
+    const entries = S.book ? await apiGetEntries(S.book) : [];
+    S.entries = Array.isArray(entries) ? entries : [];
+    keep ? [...S.checked].forEach(u => S.entries.some(e => String(e.uid) === String(u)) || S.checked.delete(u)) : S.checked.clear();
+    if (S.book && CFG.lastBook !== S.book) { CFG.lastBook = S.book; saveCfg(); }
+    if (!cur()) S.sel = S.entries[0]?.uid ?? null;
+    render();
+  }
+  async function act(msg, fn) {
+    try {
+      S.undo.push({ book: S.book, j: JSON.stringify(S.entries) });
+      while (S.undo.length > 20 || (S.undo.length > 3 && S.undo.reduce((s, x) => s + x.j.length, 0) > 6e6)) S.undo.shift();
+      await fn(); await loadEntries(true);
+      if (msg) toast.success(msg);
+    } catch (err) { S.undo.pop(); console.error(err); toast.error('操作失败：' + (err.message || err)); }
+  }
+  async function undo() {
+    const s = S.undo.pop();
+    if (!s) return toast.warning('没有可撤销的操作');
+    try {
+      const th = getTH();
+      const targetEntries = JSON.parse(s.j);
+      if (typeof th.replaceWorldbook === 'function') await th.replaceWorldbook(s.book, targetEntries);
+      else if (typeof replaceWorldbook === 'function') await replaceWorldbook(s.book, targetEntries);
+      else if (typeof replaceLorebookEntries === 'function') await replaceLorebookEntries(s.book, targetEntries);
+      else {
+        const now = await apiGetEntries(s.book);
+        const nowUids = new Set(now.map(e => String(e.uid)));
+        const targetUids = new Set(targetEntries.map(e => String(e.uid)));
+        const toDelete = now.filter(e => !targetUids.has(String(e.uid))).map(e => e.uid);
+        if (toDelete.length) await apiDeleteEntries(s.book, toDelete);
+        const toUpdate = targetEntries.filter(e => nowUids.has(String(e.uid)));
+        if (toUpdate.length) await apiSetEntries(s.book, toUpdate);
+        const toCreate = targetEntries.filter(e => !nowUids.has(String(e.uid))).map(({ uid, ...r }) => r);
+        if (toCreate.length) await apiCreateEntries(s.book, toCreate);
+      }
+      S.book = s.book; await loadEntries(); toast.success('已撤销');
+    } catch (err) { console.error(err); toast.error('撤销失败：' + (err.message || err)); }
+  }
+  async function batch(c, msg) {
+    const t = picked();
+    if (!t.length) return toast.warning('请先勾选条目');
+    await act(msg, () => apiSetEntries(S.book, t.map(e => patch(e, c))));
+  }
+
+  // ---------- AI 修改 ----------
+  const GUIDE = `【SillyTavern 世界书基础】
+- 世界书由多个条目组成；当聊天文本出现某条目的触发关键词时，该条目的正文会被注入发给模型的上下文。「常驻」条目则始终注入。
+- 因此正文要信息密集、自包含、客观，像设定百科而不是对话；不要寒暄，不要解释性废话，不要自我指涉。
+- 关键词要短而具体（人名、地名、专有名词、别称、常见称呼），不要用「他」「这个」「的」之类过于泛用的词，以免误触发。
+- 必须原样保留这些特殊内容：{{user}}、{{char}} 等宏，<标签>…</标签>，<% … %> 模板代码，方括号标记，以及 Markdown/YAML/JSON 结构。
+- 除非指令要求，保持原有语言、人称、格式风格和设定事实，不要凭空添加与已知设定冲突的内容。`;
+  const editSys = f => `你是资深的 SillyTavern 世界书编辑，按用户指令修改给定条目。
+${GUIDE}
+
+【输出格式】
+只输出一个 JSON 数组，不要解释，不要 Markdown 代码块。每个元素对应一个被修改的条目：
+- 必须带原样的 "uid"（数字）；
+- 其余只能包含这些字段：${f.join('、')}（name=标题；keys=触发关键词字符串数组；content=条目正文）；
+- 只输出确实需要修改的条目；没有改动的条目不要输出，没被允许修改的字段也不要输出。
+示例：[{"uid":3,${f.includes('keys') ? '"keys":["艾琳","队长"],' : ''}"content":"……"}]
+JSON 要求：字符串里的换行写成 \\n，英文双引号要转义，不要尾逗号。`;
+  const NEW_SYS = `你是资深的 SillyTavern 世界书编辑，按用户指令新建条目。
+${GUIDE}
+
+【新建条目规则】
+- 每个条目只讲一个主题，标题简短明确；
+- keys 给 3–8 个触发关键词（含别称、常见称呼）；
+- content 默认 80–400 字，信息密集；用户另有要求时以其要求为准；
+- type 只有对全局都生效的规则或世界观总览才用 "constant"，其余用 "selective"；
+- 不要重复「现有条目」里已有的内容，也不要与之矛盾。
+
+【输出格式】
+只输出一个 JSON 数组，不要解释，不要 Markdown 代码块。示例：
+[{"name":"标题","keys":["关键词1","关键词2"],"content":"……","type":"selective"}]
+JSON 要求：字符串里的换行写成 \\n，英文双引号要转义，不要尾逗号。`;
+  const SEL_SYS = `你是 SillyTavern 世界书的写作助手。
+${GUIDE}
+
+只输出处理后的文字本身：不要解释，不要加引号，不要 Markdown 代码块，不要重复未被要求处理的部分。`;
+  const CONFLICT_SYS = `你是 SillyTavern 世界书的架构合规与逻辑审查专家。
+审查给定的重点条目是否与全局世界书基准设定存在矛盾、时间线错乱或设定吃书。
+【输出格式】
+只输出一个 JSON 数组，严禁包含任何 Markdown 格式或额外解释：
+[
+  {
+    "uid": 12,
+    "severity": "danger",
+    "issue": "问题简述",
+    "details": "详细冲突说明，指明具体与哪个条目或世界观基准矛盾",
+    "fix_suggestion": "具体可行的修改建议"
+  }
+]
+若没有发现矛盾，只返回空数组 []。`;
+
+  const TOPOLOGY_SYS = `你是 SillyTavern 提示词注入拓扑专家。
+根据条目的内容、性质与功能，推荐其在模型上下文中的最佳插入位置（pos）、注入深度（depth）与顺序优先级（order）。
+【规则参考】
+1. "before_character_definition"：全局世界观、物理/魔法法则、系统规则 (order 100~200)；
+2. "after_character_definition"：核心 NPC 人物卡、主要阵营关系 (order 50~100)；
+3. "at_depth"（搭配 depth: 2~4）：即时环境状态、易变道具状态、当前战斗增益 (order 100)；
+4. "before_example_messages"：一般性历史背景、次要名词百科 (order 10~50)。
+【输出格式】
+只输出一个 JSON 对象：
+{
+  "pos": "after_character_definition",
+  "depth": 0,
+  "order": 100,
+  "reason": "推荐理由简述（一句话）"
+}`;
+
+  const SECONDARY_SYS = `你是 SillyTavern 世界书关键词优化专家。
+分析条目的内容与主关键词，给出 3-6 个精准防误触的「次要关键词」以及推荐的「次要逻辑」。
+【逻辑选项】
+- "and_any": 满足主词的同时，只要出现任意一个次要词即触发（最常用，大幅防误触）
+- "and_all": 满足主词的同时，必须出现全部次要词
+- "not_all": 满足主词的同时，至少有一个次要词没出现时触发
+- "not_any": 满足主词的同时，完全不出现次要词才触发（用于排除特定场景）
+【输出格式】
+只输出一个 JSON 对象：
+{
+  "keysSec": ["次要词1", "次要词2"],
+  "secLogic": "and_any",
+  "reason": "推荐理由简述"
+}`;
+
+  async function askJSON(system, user) {
+    try { return parseJSON(await ask(system, user)); }
+    catch (err) {
+      if (!/有效 JSON/.test(err.message)) throw err;
+      return parseJSON(await ask(system, user + '\n\n【注意】上一次的输出不是合法 JSON。这次只输出 JSON 数组或对象本身，不要任何其他文字。'));
+    }
+  }
+  const styleRef = skip => {
+    const c = S.entries.filter(e => !skip.includes(e.uid) && A.enabled(e) && (e.content || '').length > 80 && (e.content || '').length < 700)
+      .sort((a, b) => Math.abs(a.content.length - 250) - Math.abs(b.content.length - 250)).slice(0, 2);
+    return c.length ? `\n\n【风格参考：现有条目示例（保持相同的格式、语气和详略程度，不要抄内容）】\n` + c.map(e => `《${A.name(e)}》\n${e.content}`).join('\n---\n') : '';
+  };
+
+  async function ask(system, user) {
+    if (typeof generateRaw !== 'function') throw new Error('当前酒馆助手没有 generateRaw 接口，请更新酒馆助手');
+    if (CFG.style.trim()) system += `\n\n【创作者的统一设定与文风要求】\n${CFG.style.trim()}`;
+    const cfg = { ordered_prompts: [{ role: 'system', content: system }, { role: 'user', content: user }], should_stream: false };
+    if (CFG.mode === 'custom') {
+      if (!CFG.apiurl || !CFG.model) throw new Error('请先在「设置」里填写接口地址和模型');
+      cfg.custom_api = { apiurl: CFG.apiurl, key: CFG.key, model: CFG.model, max_tokens: CFG.maxTokens, temperature: CFG.temp };
+    }
+    return await generateRaw(cfg);
+  }
+  function parseJSON(t) {
+    t = String(t).replace(/```(?:json)?/gi, '');
+    for (const [a, b] of [['[', ']'], ['{', '}']]) {
+      const i = t.indexOf(a), j = t.lastIndexOf(b);
+      if (i >= 0 && j > i) try { const v = JSON.parse(t.slice(i, j + 1)); return Array.isArray(v) ? v : [v]; } catch { /* 试下一种 */ }
+    }
+    throw new Error('AI 返回的不是有效 JSON：' + t.slice(0, 80));
+  }
+  function chunks(list) {
+    const out = []; let c = [], n = 0;
+    for (const e of list) {
+      const l = (e.content || '').length;
+      if (c.length && (c.length >= 6 || n + l > 7000)) { out.push(c); c = []; n = 0; }
+      c.push(e); n += l;
+    }
+    if (c.length) out.push(c);
+    return out;
+  }
+  async function runAI() {
+    const a = S.ai, f = Object.keys(a.f).filter(k => a.f[k]), mkNew = a.scope === 'new';
+    if (!a.instr.trim()) return toast.warning('请先写下修改指令');
+    const targets = a.scope === 'cur' ? (cur() ? [cur()] : []) : a.scope === 'sel' ? picked() : a.scope === 'all' ? S.entries : [];
+    if (!mkNew && !targets.length) return toast.warning('没有可修改的条目：请先选中或勾选条目');
+    if (!mkNew && !f.length) return toast.warning('请至少勾选一个允许修改的字段');
+    if (targets.length > 30 && !confirm(`将分批处理 ${targets.length} 条，会多次调用 AI，继续？`)) return;
+    a.busy = true; a.cancel = false; a.results = []; a.status = '准备中…'; a.book = S.book; renderAI();
+    const brief = S.entries.slice(0, 150).map(e => `- [${e.uid}] ${A.name(e)} | ${A.keys(e).join(', ')}`).join('\n');
+    const ctx = a.ctx && brief ? `\n\n【世界书现有条目（仅供参考，不要输出它们）】\n${brief}` : '';
+    try {
+      if (mkNew) {
+        a.status = '生成中…'; renderAI();
+        for (const o of await askJSON(NEW_SYS, `【指令】${a.instr}${ctx}${a.ctx ? styleRef([]) : ''}`))
+          if (o && (o.content || o.name)) a.results.push({ uid: null, ok: true, data: { name: String(o.name || '新条目'), keys: norm.keys(o.keys), content: String(o.content || ''), type: o.type } });
+      } else {
+        const parts = chunks(targets);
+        for (let i = 0; i < parts.length && !a.cancel; i++) {
+          a.status = `处理中 ${i + 1}/${parts.length}…`; renderAI();
+          const payload = parts[i].map(e => ({ uid: e.uid, name: A.name(e), keys: A.keys(e), content: e.content }));
+          const out = await askJSON(editSys(f), `【指令】${a.instr}${ctx}${a.ctx ? styleRef(parts[i].map(x => x.uid)) : ''}\n\n【待修改条目】\n${JSON.stringify(payload)}`);
+          for (const o of out) {
+            const e = parts[i].find(x => x.uid === +o?.uid); if (!e) continue;
+            const ch = {};
+            if (f.includes('name') && o.name != null && String(o.name) !== A.name(e)) ch.name = String(o.name);
+            if (f.includes('keys') && o.keys != null && norm.keys(o.keys).join('\n') !== A.keys(e).join('\n')) ch.keys = norm.keys(o.keys);
+            if (f.includes('content') && o.content != null && String(o.content) !== (e.content || '')) ch.content = String(o.content);
+            if (Object.keys(ch).length) a.results.push({ uid: e.uid, ok: true, ch });
+          }
+        }
+      }
+      a.status = a.cancel ? '已取消' : a.results.length ? `完成：${a.results.length} 项建议，请检查后应用` : '完成：AI 没有给出任何修改';
+    } catch (err) { console.error(err); a.status = ''; toast.error('AI 调用失败：' + (err.message || err)); }
+    a.busy = false; renderAI();
+  }
+  async function applyAI() {
+    if (S.ai.book && S.ai.book !== S.book) return toast.warning('当前世界书已切换，无法应用此前生成的建议');
+    const ok = S.ai.results.filter(r => r.ok);
+    if (!ok.length) return toast.warning('没有选中任何建议');
+    const edits = ok.filter(r => r.uid != null).map(r => { const e = S.entries.find(x => x.uid === r.uid); return e && patch(e, r.ch); }).filter(Boolean);
+    const adds = ok.filter(r => r.uid == null).map(r => mk(r.data));
+    await act(`已应用 ${ok.length} 项`, async () => {
+      if (edits.length) await apiSetEntries(S.book, edits);
+      if (adds.length) await apiCreateEntries(S.book, adds);
+    });
+    S.ai.results = []; S.ai.status = ''; renderAI();
+  }
+  function diff(a, b) {
+    a = String(a ?? ''); b = String(b ?? '');
+    if (a === b) return `<div class="wbe-same">${esc(a)}</div>`;
+    const x = a.split('\n'), y = b.split('\n'), n = x.length, m = y.length;
+    if (n * m > 40000 || n > 500 || m > 500) return `<div class="wbe-del">− ${esc(a)}</div><div class="wbe-add">+ ${esc(b)}</div>`;
+    const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    let i = 0, j = 0, o = '';
+    while (i < n || j < m) {
+      if (i < n && j < m && x[i] === y[j]) { o += `<div class="wbe-same">${esc(x[i])}</div>`; i++; j++; }
+      else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) o += `<div class="wbe-add">+ ${esc(y[j++])}</div>`;
+      else o += `<div class="wbe-del">− ${esc(x[i++])}</div>`;
+    }
+    return o;
+  }
+  function card(r, i) {
+    const e = r.uid != null ? S.entries.find(x => x.uid === r.uid) : null, d = r.ch || r.data;
+    let body = '';
+    if (e) {
+      if (d.name != null) body += `<div class="wbe-ln">标题：<s>${esc(A.name(e))}</s> → <b>${esc(d.name)}</b></div>`;
+      if (d.keys) body += `<div class="wbe-ln">关键词：<s>${esc(A.keys(e).join(', '))}</s> → <b>${esc(norm.keys(d.keys).join(', '))}</b></div>`;
+      if (d.content != null) body += `<div class="wbe-diff">${diff(e.content || '', d.content)}</div>`;
+    } else body = `<div class="wbe-ln">关键词：${esc(norm.keys(d.keys).join(', ') || '—')}</div><div class="wbe-diff">${esc(d.content)}</div>`;
+    return `<div class="wbe-card"><label class="wbe-ahd"><input type="checkbox" class="aok" data-i="${i}" ${r.ok ? 'checked' : ''}><span class="nvui-badge ${e ? 'is-warn' : 'is-success'}">${e ? '修改' : '新增'}</span><b>${esc(e ? A.name(e) : d.name)}</b></label><details open><summary>查看改动</summary>${body}</details></div>`;
+  }
+  function renderAI() {
+    const a = S.ai, rs = a.results;
+    $('#wbe-ai-out', root).html(
+      `<div class="wbe-bar">${a.busy ? `<button type="button" class="nvui-btn is-ghost" data-a="aistop">取消</button><span class="nvui-spinner" aria-hidden="true"></span>` : `<button type="button" class="nvui-btn is-primary" data-a="aigo">${ico('fa-wand-magic-sparkles')}生成修改建议</button>`}<span class="nvui-hint">${esc(a.status)}</span></div>` +
+      (rs.length && !a.busy
+        ? `<div class="wbe-bar"><button type="button" class="nvui-btn is-primary" data-a="aiapply">应用所选（${rs.filter(r => r.ok).length}）</button><button type="button" class="nvui-btn is-ghost" data-a="aiall">全选 / 取消</button><span class="nvui-hint">应用前自动存快照，可用标题栏「撤销」回退</span></div>${rs.map(card).join('')}`
+        : ''));
+  }
+  function aiSync(el) {
+    const a = S.ai, n = el.name;
+    if (n === 'instr') a.instr = el.value;
+    else if (n === 'scope') a.scope = el.value;
+    else if (n === 'ctx') a.ctx = el.checked;
+    else if (el.classList.contains('aok')) { a.results[+el.dataset.i].ok = el.checked; $('[data-a=aiapply]', root).text(`应用所选（${a.results.filter(r => r.ok).length}）`); }
+  }
+
+  // ---------- 模板 / 设置 / 工具 ----------
+  const TPL = {
+    blank: ['空白', ''],
+    char: ['人物', '【基本】姓名：\n年龄/性别：\n身份/职业：\n【外貌】\n【性格】\n【背景】\n【关系】\n【口癖/行为习惯】'],
+    place: ['地点', '【名称】\n【位置】\n【环境与氛围】\n【势力/居民】\n【重要事件】'],
+    faction: ['势力', '【名称】\n【宗旨】\n【组织结构】\n【主要成员】\n【与其他势力的关系】'],
+    item: ['物品', '【名称】\n【外观】\n【功能/效果】\n【来历】\n【限制/代价】'],
+    rule: ['规则', '【规则名称】\n【内容】\n【例外情况】'],
+  };
+  const SEL_AI = [
+    ['润色', '润色这段文字：理顺句子，替换生硬和重复的表达，不改变任何设定事实和信息量'],
+    ['扩写', '扩写这段文字：补充具体、可感的细节（动作、感官、数字、例子），不与原有设定矛盾，篇幅约增加一倍'],
+    ['精简', '精简这段文字：删除冗余、重复和空泛形容，保留全部关键信息，篇幅压缩到约一半'],
+    ['续写', '顺着这段文字的设定、语气和格式自然续写一段，只输出续写的部分'],
+    ['去AI腔', '改写得更自然：去掉套话、排比、空泛抒情和「仿佛/宛如」式比喻堆砌，用具体细节替代，保持信息不变'],
+    ['要点化', '改写成要点列表，每行一个要点，格式为「项目：内容」，保持信息完整'],
+  ];
+  function setHTML() {
+    const c = CFG;
+    const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-on' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
+    const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.5</span></div>
+      <div class="nvui-acc is-open">
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <div class="wbe-bar">${modeBtn('st')}${modeBtn('custom')}</div>
+          ${row('接口地址', `<input class="nvui-input is-path" name="s_apiurl" value="${esc(c.apiurl)}" placeholder="https://api.openai.com/v1">`)}
+          ${row('API Key', `<input class="nvui-input is-path" name="s_key" type="password" autocomplete="off" value="${esc(c.key)}" placeholder="sk-…">`)}
+          ${row('模型', `<input class="nvui-input is-path" name="s_model" list="wbe-models" value="${esc(c.model)}" placeholder="例如 gpt-4o-mini"><datalist id="wbe-models">${S.models.map(m => `<option value="${esc(m)}">`).join('')}</datalist>`)}
+          ${row('温度', `<input class="nvui-input is-number" name="s_temp" type="number" step="0.1" min="0" max="2" value="${c.temp}">`)}
+          ${row('最大输出 tokens', `<input class="nvui-input is-number" name="s_max" type="number" step="256" min="256" value="${c.maxTokens}">`)}
+          <div class="wbe-bar"><button type="button" class="nvui-btn is-ghost" data-a="setmodels">拉取模型列表</button><button type="button" class="nvui-btn is-secondary" data-a="settest">测试连接</button><span id="wbe-setmsg" class="nvui-hint"></span></div>
+        </div></div>
+      </div>
+      <div class="nvui-acc is-open">
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${c.style.trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style)}</textarea></label>
+        </div></div>
+      </div>
+      <div class="wbe-bar" style="margin-top:var(--nvui-space-2)">
+        <span class="nvui-hint" style="flex:1 1 260px">修改后自动保存。API Key 以明文保存在本浏览器的 localStorage，请勿在公共设备上使用。</span>
+        <button type="button" class="nvui-btn is-sm is-danger" data-a="clearstorage" title="仅清理本编辑器的 API Key 与本地设置，不影响酒馆其他数据">${ico('fa-trash')}清理本脚本配置</button>
+      </div>`;
+  }
+  function renderSet() {
+    $('#wbe-set', root).html(setHTML());
+  }
+  function cfgSync(el) {
+    const n = el.name;
+    if (n === 's_style') { CFG.style = el.value; $('#wbe-stylesum', root).text(el.value.trim() ? '已设置' : '未设置'); }
+    else {
+      CFG[{ s_apiurl: 'apiurl', s_key: 'key', s_model: 'model', s_temp: 'temp', s_max: 'maxTokens' }[n]] = el.type === 'number' ? +el.value : el.value.trim();
+      if (n === 's_model' && CFG.mode === 'custom') $('#wbe-modesum', root).text(CFG.model || '自定义 API');
+    }
+    saveCfg(); $('#wbe-setmsg', root).text('已保存');
+  }
+  function toolHTML() {
+    const t = S.tool;
+    const tgl = (k, l, on) => `<button type="button" class="nvui-btn is-sm${on ? ' is-on' : ''}" data-a="ttgl" data-k="${k}" aria-pressed="${on}">${l}</button>`;
+    return `<div class="wbe-form">
+      <div class="nvui-acc is-open">
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-magnifying-glass')}全书查找替换</span><span class="nvui-acc-summary" id="wbe-tsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <div class="wbe-grid2">${field('查找', `<input class="nvui-input" name="t_find" value="${esc(t.find)}" placeholder="例如：旧角色名">`)}${field('替换为', `<input class="nvui-input" name="t_rep" value="${esc(t.rep)}">`)}</div>
+          <div class="wbe-bar"><span class="nvui-hint">范围</span>${tgl('content', '内容', t.f.content)}${tgl('keys', '关键词', t.f.keys)}${tgl('name', '标题', t.f.name)}${tgl('re', '正则', t.re)}</div>
+          <div class="wbe-bar"><button type="button" class="nvui-btn is-ghost" data-a="tfind">预览命中</button><button type="button" class="nvui-btn is-primary" data-a="treplace">全部替换</button><span id="wbe-tmsg" class="nvui-hint"></span></div>
+        </div></div>
+      </div>
+      <div class="nvui-acc is-open">
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-vial')}触发测试</span><span class="nvui-acc-summary" id="wbe-ptsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <textarea class="nvui-input wbe-probe" name="probe" placeholder="粘贴一段聊天文本，看会触发哪些条目">${esc(t.probe)}</textarea>
+          <div id="wbe-hits"></div>
+          <p class="nvui-hint">只按常驻和主关键词判断，不含次要关键词、递归、概率。</p>
+        </div></div>
+      </div>
+      <div class="nvui-acc is-open">
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-stethoscope')}世界书体检与一致性审查</span><span class="nvui-acc-summary" id="wbe-hsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <div id="wbe-health"></div>
+          <div class="wbe-bar" style="margin-top:var(--nvui-space-2)">
+            <button type="button" class="nvui-btn is-secondary" data-a="aiconflict">${ico('fa-wand-magic-sparkles')}AI 深度事实矛盾与冲突审查</button>
+            <span class="nvui-hint" id="wbe-cf-status">检查跨条目的生卒状态、阵营归属、时序冲突及专有名词不一致</span>
+          </div>
+          <div id="wbe-conflicts"></div>
+        </div></div>
+      </div>
+    </div>`;
+  }
+  function toolSync(el) {
+    const t = S.tool, n = el.name;
+    if (n === 't_find') t.find = el.value; else if (n === 't_rep') t.rep = el.value;
+  }
+  function findHits() {
+    const t = S.tool; if (!t.find) return [];
+    if (t.re && /(\+|\*|\{[0-9, ]+\})\s*\)?\s*(\+|\*|\{[0-9, ]+\})/.test(t.find)) {
+      toast.error('检测到潜在高危回溯正则，已拦截');
+      return [];
+    }
+    let re; try { re = new RegExp(t.re ? t.find : t.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'); } catch { toast.error('正则表达式无效'); return []; }
+    const cnt = s => (s.match(re) || []).length, rp = s => s.replace(re, t.re ? t.rep : () => t.rep), out = [];
+    for (const e of S.entries) {
+      const ch = {}, nm = A.name(e), ct = e.content || '';
+      if (t.f.content && cnt(ct)) ch.content = rp(ct);
+      if (t.f.name && cnt(nm)) ch.name = rp(nm);
+      if (t.f.keys && A.keys(e).some(cnt)) ch.keys = A.keys(e).map(rp);
+      if (Object.keys(ch).length) out.push({ e, ch });
+    }
+    return out;
+  }
+  function health() {
+    const out = [], km = {}, nm = {};
+    const uidMap = new Map(S.entries.map(e => [e.uid, e]));
+    const nameOf = u => A.name(uidMap.get(u)) || '（无标题）';
+    const commonWords = new Set(['他', '她', '它', '他们', '这个', '那个', '因为', '并且', '你', '我', 'the', 'this', 'that', 'he', 'she', 'it']);
+    const contentsLower = S.entries.map(e => (e.content || '').toLowerCase());
+    S.entries.forEach((e, idx) => {
+      if (!A.enabled(e)) return;
+      const n = A.name(e) || '（无标题）', t = A.type(e), k = tokE(e), keys = A.keys(e);
+      if (!(e.content || '').trim()) out.push([e.uid, '内容为空', n, 'danger']);
+      if (t !== 'constant' && !keys.length) out.push([e.uid, '没有触发关键词，永远不会触发', n, 'warn']);
+      if (k > 800) out.push([e.uid, `内容较长（约 ${k} tokens），建议精简或拆分`, n, 'info']);
+      const dangerous = keys.filter(x => commonWords.has(x.toLowerCase()));
+      if (dangerous.length && !A.keysSec(e).length) out.push([e.uid, `含高危泛用词「${dangerous.join('、')}」，容易误触，建议配置次要关键词`, n, 'danger']);
+      if (t !== 'constant' && keys.length) {
+        const isMentioned = keys.some(x => {
+          const xLower = x.toLowerCase();
+          return contentsLower.some((c, j) => j !== idx && c.includes(xLower));
+        });
+        if (!isMentioned) {
+          out.push([e.uid, '孤岛设定：该条目的触发词未被任何其他条目正文提及，可能无法级联触发', n, 'info']);
+        }
+      }
+      (nm[n] ??= []).push(e.uid);
+      if (t !== 'constant') new Set(keys.map(x => x.toLowerCase())).forEach(x => (km[x] ??= []).push(e.uid));
+    });
+    for (const n in nm) if (nm[n].length > 1) nm[n].forEach(u => out.push([u, `标题重复（${nm[n].length} 条）`, n, 'warn']));
+    for (const x in km) if (km[x].length > 1) km[x].forEach(u => out.push([u, `关键词「${x}」被 ${km[x].length} 个条目共用`, nameOf(u), 'warn']));
+    return out;
+  }
+  function renderTool() {
+    $('#wbe-tool', root).html(toolHTML());
+    const on = S.entries.filter(e => A.enabled(e)), h = health(), sum = l => l.reduce((s, e) => s + tokE(e), 0);
+    $('#wbe-hsum', root).text(h.length ? `${h.length} 项关注` : '无明显问题');
+    const badgeMap = { danger: 'is-danger', warn: 'is-warn', info: 'is-info' };
+    $('#wbe-health', root).html(`<p class="nvui-hint">启用 ${on.length} 条，合计约 ${sum(on)} tokens；其中常驻约 ${sum(on.filter(e => A.type(e) === 'constant'))} tokens。点击问题可跳转到对应条目。</p>` +
+      (h.length ? h.slice(0, 80).map(([u, m, n, lvl]) => `<div class="wbe-hrow" data-a="goto" data-u="${esc(u)}"><span class="nvui-badge ${badgeMap[lvl] || 'is-warn'}">${lvl === 'danger' ? '严重' : lvl === 'warn' ? '警告' : '提示'}</span> <b>${esc(n)}</b> <span class="nvui-muted">${esc(m)}</span></div>`).join('') + (h.length > 80 ? `<p class="nvui-hint">还有 ${h.length - 80} 条未显示</p>` : '') : '<div class="nvui-alert is-success"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>没有发现明显问题</span></div>'));
+    if (S.tool.aiConflicts?.length) renderConflicts();
+    if (S.tool.probe) runTest();
+  }
+  function renderConflicts() {
+    const cfs = S.tool.aiConflicts || [];
+    if (!cfs.length) { $('#wbe-conflicts', root).html(''); return; }
+    $('#wbe-conflicts', root).html(`<div class="wbe-card" style="border-left:3px solid var(--nvui-danger)"><div class="wbe-ahd"><span class="nvui-badge is-danger">AI 冲突体检报告</span><b>发现 ${cfs.length} 处潜在矛盾</b></div>` +
+      cfs.map(c => `<div class="wbe-card" style="margin-top:var(--nvui-space-1)">
+        <div class="wbe-ln"><span class="nvui-badge ${c.severity === 'danger' ? 'is-danger' : 'is-warn'}">${c.severity === 'danger' ? '严重事实矛盾' : '潜在冲突'}</span> <b>${esc(c.issue || '设定冲突')}</b></div>
+        <div class="nvui-hint" style="margin:4px 0">${esc(c.details || '')}</div>
+        <div class="wbe-ln" style="color:var(--nvui-ok);font-size:var(--nvui-fs-sm)"><b>建议方案：</b>${esc(c.fix_suggestion || '请根据上下文核实设定')}</div>
+        ${c.uid != null ? `<button type="button" class="nvui-btn is-sm is-ghost" data-a="goto" data-u="${esc(c.uid)}">跳转至该条目修复</button>` : ''}
+      </div>`).join('') + '</div>');
+  }
+  let probeTimer = null;
+  function scheduleTest() {
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(runTest, 150);
+  }
+  function runTest() {
+    const t = $('[name=probe]', root).val() || '';
+    S.tool.probe = t;
+    const tLower = t.toLowerCase();
+    const hits = S.entries.filter(e => A.enabled(e) && (A.type(e) === 'constant' || A.keys(e).some(k => k && hit(k, t, tLower)))).sort((a, b) => A.order(b) - A.order(a));
+    $('#wbe-ptsum', root).text(t ? `命中 ${hits.length} 条` : '');
+    $('#wbe-hits', root).html(t ? `<p class="nvui-hint">命中 ${hits.length} 条，约 ${hits.reduce((s, e) => s + tokE(e), 0)} tokens</p>` +
+      hits.map(e => `<div class="wbe-hitrow ${(TYPE[A.type(e)] || [])[1] || ''}">${esc(A.name(e))} <span class="nvui-muted">#${esc(A.order(e))}</span></div>`).join('') : '');
+  }
+
+  // ---------- 拖拽排序 ----------
+  // 「显示顺序」模式改写 display_index / displayIndex；「按 order」模式改写 order（order 互不相同时只在这些值之间重排）
+  const getIdx = e => e.display_index ?? e.displayIndex;
+  const canDrag = () => S.sort === 'order' || (S.sort === 'idx' && S.entries.some(e => typeof getIdx(e) === 'number'));
+  async function commitMove(src, tgt, after) {
+    if (src == null || src === tgt) return;
+    if (!canDrag()) return toast.info('请先把排序切换到「显示顺序」或「按 order」');
+    const vis = visible().map(e => e.uid), E = u => S.entries.find(e => e.uid === u), ups = [];
+    if (!vis.includes(src) || !vis.includes(tgt)) return;
+    vis.splice(vis.indexOf(src), 1);
+    vis.splice(vis.indexOf(tgt) + (after ? 1 : 0), 0, src);
+    if (S.sort === 'order') {
+      const ents = vis.map(E), vals = ents.map(e => A.order(e)), distinct = new Set(vals).size === vals.length;
+      const maxVal = vals.length ? Math.max(...vals, 0) : 100;
+      const slots = distinct ? [...vals].sort((a, b) => b - a) : vals.map((_, k) => maxVal - k);
+      ents.forEach((e, k) => { if (A.order(e) !== slots[k]) ups.push(patch(e, { order: slots[k] })); });
+    } else {
+      const vs = new Set(vis), it = vis[Symbol.iterator](), all = [...S.entries].sort((a, b) => (getIdx(a) ?? 0) - (getIdx(b) ?? 0));
+      all.map(e => (vs.has(e.uid) ? E(it.next().value) : e)).forEach((e, k) => {
+        if (getIdx(e) !== k) {
+          const up = { uid: e.uid };
+          if ('display_index' in e || !('displayIndex' in e)) up.display_index = k;
+          if ('displayIndex' in e) up.displayIndex = k;
+          ups.push(up);
+        }
+      });
+    }
+    if (ups.length) await act('已调整顺序', () => apiSetEntries(S.book, ups));
+  }
+  function startDrag(oe, rowEl) {
+    if (!rowEl || !canDrag()) return;
+    const list = $('#wbe-items', root)[0], src = +$(rowEl).data('uid');
+    let x = oe.clientX, y = oe.clientY, target = null, after = false;
+    const clear = () => $('.wbe-row', list).removeClass('drop-before drop-after');
+    const pick = () => {
+      const el = D.elementFromPoint(x, y)?.closest?.('.wbe-row');
+      clear();
+      if (!el || !list.contains(el) || el === rowEl) { target = null; return; }
+      const r = el.getBoundingClientRect(); target = el; after = y > r.top + r.height / 2;
+      $(el).addClass(after ? 'drop-after' : 'drop-before');
+    };
+    const move = e => { x = e.clientX; y = e.clientY; pick(); };
+    const tick = setInterval(() => {
+      const r = list.getBoundingClientRect();
+      if (y < r.top + 40) list.scrollTop -= 14; else if (y > r.bottom - 40) list.scrollTop += 14; else return;
+      pick();
+    }, 30);
+    const cleanDrag = () => {
+      clearInterval(tick);
+      D.removeEventListener('pointermove', move);
+      D.removeEventListener('pointerup', end);
+      D.removeEventListener('pointercancel', end);
+      W.removeEventListener('blur', cleanDrag);
+      $(rowEl).removeClass('dragging'); clear(); D.body.style.cursor = '';
+    };
+    const end = async e => {
+      cleanDrag();
+      if (e.type === 'pointerup' && target) await commitMove(src, +$(target).data('uid'), after);
+    };
+    W.addEventListener('blur', cleanDrag);
+    $(rowEl).addClass('dragging'); D.body.style.cursor = 'grabbing';
+    D.addEventListener('pointermove', move); D.addEventListener('pointerup', end); D.addEventListener('pointercancel', end);
+  }
+
+  // ---------- 渲染 ----------
+  function render() {
+    if (!root) return;
+    isRendering = true;
+    try {
+      renderTop();
+      renderList();
+      renderEditor();
+    } finally {
+      isRendering = false;
+    }
+  }
+  function renderTab(key) {
+    if (key === 'entries') render();
+    else if (key === 'ai') { $('#wbe-ai', root).html(aiHTML()); renderAI(); }
+    else if (key === 'tool') renderTool();
+    else if (key === 'set') renderSet();
+  }
+  function activateTab(key) {
+    S.tab = key;
+    panel.setTab(key);
+    renderTab(key);
+  }
+  function renderTop() {
+    const bookOpts = S.books.map(b => `<option value="${esc(b)}" ${b === S.book ? 'selected' : ''}>${esc(b)}</option>`).join('') || '<option value="">（还没有世界书）</option>';
+    $('#wbe-book', root).html(bookOpts).val(S.book);
+    $('#wbe-bpos', root).html(Object.entries(POS).map(([k, v]) => `<option value="${k}">${v}</option>`).join(''));
+    const groups = allGroups();
+    const gOpts = `<option value="all">全部分组</option><option value="__ungrouped__">未分组</option>` + groups.map(g => `<option value="${esc(g)}" ${g === S.groupFlt ? 'selected' : ''}>${esc(g)}</option>`).join('');
+    $('#wbe-gflt', root).html(gOpts).val(S.groupFlt || 'all');
+    $('#wbe-flt', root).val(S.flt); $('#wbe-sort', root).val(S.sort); $('#wbe-tpl', root).val(CFG.tpl || 'blank');
+  }
+  function matchQuery(e, q) {
+    if (!q) return true;
+    if (A.name(e).toLowerCase().includes(q)) return true;
+    if (A.group(e).toLowerCase().includes(q)) return true;
+    if (A.keys(e).some(k => k.toLowerCase().includes(q))) return true;
+    if (A.keysSec(e).some(k => k.toLowerCase().includes(q))) return true;
+    return (e.content || '').toLowerCase().includes(q);
+  }
+  function visible() {
+    const q = S.q.toLowerCase().trim();
+    let v = S.entries.filter(e => matchQuery(e, q)
+      && (S.flt === 'all' || (S.flt === 'off' ? !A.enabled(e) : A.type(e) === S.flt))
+      && (S.groupFlt === 'all' || (S.groupFlt === '__ungrouped__' ? !A.group(e) : A.group(e) === S.groupFlt)));
+    if (S.sort === 'idx') { if (v.some(e => typeof getIdx(e) === 'number')) v = [...v].sort((a, b) => (getIdx(a) ?? 0) - (getIdx(b) ?? 0)); }
+    else if (S.sort === 'order') v = [...v].sort((a, b) => A.order(b) - A.order(a));
+    else if (S.sort === 'name') v = [...v].sort((a, b) => zhCollator.compare(A.name(a), A.name(b)));
+    else if (S.sort === 'tok') v = [...v].sort((a, b) => tokE(b) - tokE(a));
+    return v;
+  }
+  function renderList() {
+    const v = visible();
+    const drag = canDrag();
+    $('#wbe-hint', root).text(drag ? '' : S.sort === 'idx' ? '此版本的条目没有显示顺序字段，请切到「按 order」后拖拽' : '切换到「显示顺序」或「按 order」后可拖拽排序');
+    $('#wbe-list', root).toggleClass('has-sel', S.checked.size > 0);
+    $('#wbe-selcnt', root).text(`已选 ${S.checked.size} 项`);
+    const on = S.entries.filter(e => A.enabled(e)), ct = on.filter(e => A.type(e) === 'constant').reduce((s, e) => s + tokE(e), 0), all = on.reduce((s, e) => s + tokE(e), 0);
+    $('#wbe-count', root).text(`${S.entries.length} 条` + (v.length !== S.entries.length ? `（显示 ${v.length}）` : '') + ` · 常驻 ${ct}t · 启用合计 ${all}t`);
+    $('#wbe-items', root).html(v.slice(0, S.limit).map(e => {
+      const t = A.type(e), on2 = A.enabled(e), g = A.group(e);
+      return `<div class="wbe-row ${(TYPE[t] || [])[1] || ''}${String(e.uid) === String(S.sel) ? ' on' : ''}${on2 ? '' : ' off'}" data-uid="${esc(e.uid)}">
+        ${drag ? `<span class="wbe-grip" title="按住拖动排序">${ico('fa-grip-vertical')}</span>` : ''}<input type="checkbox" class="wbe-chk" ${S.checked.has(e.uid) ? 'checked' : ''} aria-label="选择条目">
+        <div class="wbe-mid">
+          <div class="wbe-nm">${esc(A.name(e) || '（无标题）')} ${g ? `<span class="nvui-badge" style="font-size:10px;padding:0 4px">${esc(g)}</span>` : ''}</div>
+          <div class="wbe-sub">${t === 'constant' ? '常驻' : esc(A.keys(e).join(', ') || '无主词')}${A.keysSec(e).length ? ` <span class="nvui-muted">+次要词(${A.keysSec(e).length})</span>` : ''}</div>
+        </div>
+        <span class="wbe-meta">${tokE(e)}t · #${A.order(e)}</span>
+        <label class="nvui-switch-row wbe-rowsw" title="启用 / 禁用"><input type="checkbox" class="wbe-sw" ${on2 ? 'checked' : ''}><span class="nvui-sr-only">启用 / 禁用</span></label></div>`;
+    }).join('') + (v.length > S.limit ? `<button type="button" class="nvui-btn is-sm is-ghost wbe-more" data-a="more">显示更多（还有 ${v.length - S.limit} 条）</button>` : '') || `<div class="nvui-empty">${S.book ? '没有符合筛选条件的条目：点上方「条目」按钮新建，或到 AI 标签页生成。' : '先在上方新建一本世界书。'}</div>`);
+  }
+  const chip = k => `<span class="nvui-chip" data-k="${esc(k)}">${esc(k)}<button type="button" class="wbe-chipx" data-a="rmchip" aria-label="删除关键词">${ico('fa-xmark')}</button></span>`;
+  function editHTML(e) {
+    const pos = A.pos(e), opts = Object.entries(POS);
+    if (pos && !POS[pos]) opts.push([pos, pos]);
+    const groups = allGroups();
+    return `<div class="wbe-form wbe-fedit">
+      <div class="wbe-grid2">
+        ${field('标题', `<input class="nvui-input" name="name" value="${esc(A.name(e))}">`)}
+        ${field('分组 (Group)', `<input class="nvui-input" name="group" list="wbe-glist" value="${esc(A.group(e))}" placeholder="如：NPC/地理/阵营/规则"><datalist id="wbe-glist">${groups.map(g => `<option value="${esc(g)}">`).join('')}</datalist>`)}
+      </div>
+      <div class="wbe-grid2 is-auto">
+        ${field('类型', `<select class="nvui-input" name="type">${Object.keys(TYPE).map(k => `<option value="${k}" ${A.type(e) === k ? 'selected' : ''}>${TYPE[k][0]}</option>`).join('')}</select>`)}
+        <label class="nvui-switch-row wbe-swbare"><input type="checkbox" name="enabled" ${A.enabled(e) ? 'checked' : ''}><span>启用</span></label>
+      </div>
+      <div class="wbe-field">
+        <div class="wbe-lbl">
+          <span>主要触发关键词</span>
+          <span class="nvui-hint">回车或逗号添加，/正则/i 也可以</span>
+          <span class="nvui-grow"></span>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="aikeys">${ico('fa-wand-magic-sparkles')}提取关键词</button>
+        </div>
+        <div class="wbe-chips wbe-mainchips">${A.keys(e).map(chip).join('')}<input class="wbe-chipin" placeholder="添加主关键词" aria-label="添加主关键词"></div>
+      </div>
+      <div class="wbe-field">
+        <div class="wbe-lbl">
+          <span>次要关键词与逻辑</span>
+          <span class="nvui-hint">除主词外还需满足次要条件时触发</span>
+          <span class="nvui-grow"></span>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="aisec">${ico('fa-wand-magic-sparkles')}AI 搭配次要词</button>
+        </div>
+        <div class="wbe-bar" style="margin-bottom:var(--nvui-space-1)">
+          <select class="nvui-input" name="seclogic" style="font-size:var(--nvui-fs-sm);flex:1 1 200px">
+            <option value="and_any" ${A.secLogic(e) === 'and_any' ? 'selected' : ''}>满足主词 + 出现任意次要词 (and_any)</option>
+            <option value="and_all" ${A.secLogic(e) === 'and_all' ? 'selected' : ''}>满足主词 + 出现全部次要词 (and_all)</option>
+            <option value="not_all" ${A.secLogic(e) === 'not_all' ? 'selected' : ''}>满足主词 + 至少一个次要词未出现 (not_all)</option>
+            <option value="not_any" ${A.secLogic(e) === 'not_any' ? 'selected' : ''}>满足主词 + 完全不出现次要词 (not_any)</option>
+          </select>
+        </div>
+        <div class="wbe-chips wbe-secchips">${A.keysSec(e).map(chip).join('')}<input class="wbe-chipin wbe-secchipin" placeholder="添加次要词" aria-label="添加次要关键词"></div>
+      </div>
+      <div class="wbe-field">
+        <div class="wbe-lbl">
+          <span>上下文拓扑位置</span>
+          <span class="nvui-grow"></span>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="airecom">${ico('fa-compass')}AI 推荐位置与优先级</button>
+        </div>
+        <div class="wbe-grid4">
+          ${field('位置', `<select class="nvui-input" name="pos">${opts.map(([k, v]) => `<option value="${esc(k)}" ${pos === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`)}
+          ${field('深度', `<input class="nvui-input" name="depth" type="number" value="${A.depth(e)}">`)}
+          ${field('顺序', `<input class="nvui-input" name="order" type="number" value="${A.order(e)}">`)}
+          ${field('概率 %', `<input class="nvui-input" name="prob" type="number" min="0" max="100" value="${A.prob(e)}">`)}
+        </div>
+        <div id="wbe-recomout"></div>
+      </div>
+      <label class="wbe-field"><span class="wbe-lbl"><span>内容</span><span class="nvui-hint" id="wbe-tok"></span></span><textarea class="nvui-input wbe-big" name="content" spellcheck="false">${esc(e.content)}</textarea></label>
+      <div class="wbe-bar"><span class="nvui-hint">选区 AI（不选则处理全文）：</span>${SEL_AI.map(([l], i) => `<button type="button" class="nvui-btn is-sm is-ghost" data-a="selai" data-i="${i}">${l}</button>`).join('')}<button type="button" class="nvui-btn is-sm is-ghost" data-a="selai" data-i="-1">自定义…</button></div><div id="wbe-selout"></div>
+    </div>`;
+  }
+  function renderEditor() {
+    const e = cur(), bar = $('#wbe-ebar', root), body = $('#wbe-ebody', root), foot = $('#wbe-efoot', root);
+    bar.html(`<button type="button" class="nvui-icon-btn wbe-back" data-a="back" aria-label="返回列表">${ico('fa-chevron-left')}</button>` +
+      (e ? `<button type="button" class="nvui-btn is-sm${S.view === 'edit' ? ' is-secondary' : ''}" data-a="view" data-v="edit">编辑</button><button type="button" class="nvui-btn is-sm${S.view === 'json' ? ' is-secondary' : ''}" data-a="view" data-v="json">JSON</button>` : ''));
+    if (!e) { body.html('<div class="nvui-empty">在左侧选择一个条目开始编辑。</div>'); foot.html(''); return; }
+    if (S.view === 'json') {
+      body.html(`<div class="wbe-form wbe-fedit"><textarea class="nvui-input wbe-big" name="json" spellcheck="false">${esc(JSON.stringify(e, null, 2))}</textarea><p class="nvui-hint">可以直接改任何字段，字段名随酒馆助手版本而异。</p></div>`);
+      foot.html('<button type="button" class="nvui-btn is-primary" data-a="applyjson">应用 JSON</button>');
+    } else {
+      body.html(editHTML(e));
+      foot.html(`<button type="button" class="nvui-btn is-primary" data-a="save">保存</button><span id="wbe-dot" class="nvui-hint is-warn" style="display:none"><span class="nvui-status-dot is-warn"></span> 未保存</span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-secondary" data-a="aicur">${ico('fa-wand-magic-sparkles')}AI 修改此条</button><button type="button" class="nvui-btn is-ghost" data-a="dup">复制</button><button type="button" class="nvui-btn is-danger" data-a="del">删除</button>`);
+      updTok(true);
+    }
+    setDirty(S.dirty);
+  }
+  function aiHTML() {
+    const a = S.ai, n = { cur: cur() ? 1 : 0, sel: S.checked.size, all: S.entries.length };
+    const sc = [['cur', `当前条目（${n.cur}）`], ['sel', `已勾选（${n.sel}）`], ['all', `全部条目（${n.all}）`], ['new', '新建条目（按描述生成）']];
+    const tgl = (k, l) => `<button type="button" class="nvui-btn is-sm${a.f[k] ? ' is-on' : ''}" data-a="atgl" data-k="${k}" aria-pressed="${a.f[k]}">${l}</button>`;
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">AI 修改</span></div><div class="wbe-form">
+      <div class="wbe-presets">${PRESETS.map(([l], i) => `<button type="button" class="nvui-btn is-sm is-ghost" data-a="preset" data-i="${i}">${l}</button>`).join('')}${CFG.presets.map((p, i) => `<span class="wbe-upr"><button type="button" class="nvui-btn is-sm is-ghost" data-a="upreset" data-i="${i}" title="${esc(p.t)}">${esc(p.l)}</button><button type="button" class="nvui-btn is-sm is-ghost wbe-upx" data-a="udel" data-i="${i}" aria-label="删除预设 ${esc(p.l)}">${ico('fa-xmark')}</button></span>`).join('')}<button type="button" class="nvui-btn is-sm is-ghost" data-a="usave">${ico('fa-plus')}保存当前指令为预设</button></div>
+      ${field('你想怎么改？', `<textarea class="nvui-input" name="instr" rows="4" placeholder="例如：把内容改成第三人称客观描述，并补充同义关键词">${esc(a.instr)}</textarea>`)}
+      <div class="wbe-grid2">
+        ${field('范围', `<select class="nvui-input" name="scope">${sc.map(([k, t]) => `<option value="${k}" ${a.scope === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
+        <div class="wbe-field"><span>允许 AI 修改</span><div class="wbe-bar">${tgl('content', '内容')}${tgl('keys', '关键词')}${tgl('name', '标题')}</div></div>
+      </div>
+      <label class="nvui-switch-row wbe-swbare"><input type="checkbox" name="ctx" ${a.ctx ? 'checked' : ''}><span>附带背景：其他条目的标题/关键词，以及 2 个现有条目作为风格参考（更连贯，但多耗 token）</span></label>
+      <p class="nvui-hint">当前接口：${CFG.mode === 'custom' ? esc(CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'} <button type="button" class="nvui-btn is-sm is-ghost" data-a="gset">去设置</button>　AI 的结果不会直接写入，需要你逐项检查后点「应用」。快捷键 Ctrl+Enter 生成。</p>
+      <div id="wbe-ai-out"></div></div>`;
+  }
+  const updTok = (immediate = false) => {
+    clearTimeout(tokTimer);
+    const update = () => {
+      const el = $('[name=content]', root);
+      if (el.length) $('#wbe-tok', root).text(`约 ${tok(el.val())} tokens`);
+    };
+    if (immediate) update(); else tokTimer = setTimeout(update, 150);
+  };
+  function readForm() {
+    const g = n => $(`[name=${n}]`, root);
+    const mainBox = $('.wbe-mainchips', root);
+    const secBox = $('.wbe-secchips', root);
+    const keys = new Set($('.nvui-chip', mainBox).map((_, c) => $(c).attr('data-k')).get());
+    const pendMain = $('.wbe-chipin:not(.wbe-secchipin)', mainBox).val()?.trim();
+    if (pendMain) norm.keys(pendMain.startsWith('/') ? [pendMain] : pendMain).forEach(k => keys.add(k));
+
+    const keysSec = new Set($('.nvui-chip', secBox).map((_, c) => $(c).attr('data-k')).get());
+    const pendSec = $('.wbe-secchipin', secBox).val()?.trim();
+    if (pendSec) norm.keys(pendSec.startsWith('/') ? [pendSec] : pendSec).forEach(k => keysSec.add(k));
+
+    const rawProb = g('prob').val();
+    const prob = (rawProb === '' || rawProb == null || isNaN(+rawProb)) ? 100 : Math.min(100, Math.max(0, +rawProb));
+
+    return {
+      name: g('name').val(), group: g('group').val(), enabled: g('enabled').prop('checked'), type: g('type').val(),
+      keys: [...keys], keysSec: [...keysSec], secLogic: g('seclogic').val() || 'and_any',
+      pos: g('pos').val(), depth: +g('depth').val() || 0, order: +g('order').val() || 0,
+      prob, content: g('content').val(),
+    };
+  }
+  function updateRowSelection(uid) {
+    const list = $('#wbe-items', root)[0];
+    if (!list) return;
+    list.querySelectorAll('.wbe-row.on').forEach(r => r.classList.remove('on'));
+    const newRow = list.querySelector(`.wbe-row[data-uid="${uid}"]`);
+    if (newRow) newRow.classList.add('on');
+  }
+  function select(uid) {
+    if (uid !== S.sel && !guard()) return;
+    S.sel = uid; S.dirty = false;
+    $('#wbe-md', root).addClass('show-edit');
+    updateRowSelection(uid);
+    renderEditor();
+    const row = $('.wbe-row.on', root)[0];
+    const list = $('#wbe-items', root)[0];
+    if (row && list) {
+      const rTop = row.offsetTop, rBottom = rTop + row.offsetHeight;
+      const lTop = list.scrollTop, lBottom = lTop + list.clientHeight;
+      if (rTop < lTop) list.scrollTop = rTop;
+      else if (rBottom > lBottom) list.scrollTop = rBottom - list.clientHeight;
+    }
+  }
+  function addChips(box, text) {
+    const have = new Set($('.nvui-chip', box).map((_, c) => $(c).attr('data-k')).get());
+    norm.keys(text.startsWith('/') ? [text] : text).forEach(k => { if (!have.has(k)) { have.add(k); $(chip(k), D).insertBefore($('.wbe-chipin', box)); } });
+  }
+
+  // ---------- 动作 ----------
+  const goEdit = uid => { S.sel = uid; S.view = 'edit'; setDirty(false); activateTab('entries'); $('#wbe-md', root).addClass('show-edit'); };
+  const actions = {
+    close() { if (guard()) { setDirty(false); panel.close(); } },
+    back: () => $('#wbe-md', root).removeClass('show-edit'),
+    view(el) { const v = el.data('v'); if (v === S.view) return; if (!guard()) return; setDirty(false); S.view = v; renderEditor(); },
+    aicur() { if (!guard()) return; setDirty(false); S.ai.scope = 'cur'; activateTab('ai'); },
+    aibatch() { if (!guard()) return; setDirty(false); S.ai.scope = 'sel'; activateTab('ai'); },
+    preset(el) { const p = PRESETS[+el.data('i')]; S.ai.instr = p[1]; if (p[2]) S.ai.scope = p[2]; renderTab('ai'); $('[name=instr]', root).trigger('focus'); },
+    upreset(el) { S.ai.instr = CFG.presets[+el.data('i')].t; renderTab('ai'); $('[name=instr]', root).trigger('focus'); },
+    udel(el) { CFG.presets.splice(+el.data('i'), 1); saveCfg(); renderTab('ai'); },
+    usave() {
+      const t = S.ai.instr.trim(); if (!t) return toast.warning('请先写下指令');
+      const l = (prompt('预设名称（简短）', t.slice(0, 6)) || '').trim(); if (!l) return;
+      CFG.presets.push({ l, t }); saveCfg(); renderTab('ai');
+    },
+    gset() { if (!guard()) return; setDirty(false); activateTab('set'); },
+    atgl(el) { const k = el.data('k'); S.ai.f[k] = !S.ai.f[k]; el.toggleClass('is-on', S.ai.f[k]).attr('aria-pressed', String(S.ai.f[k])); },
+    ttgl(el) { const k = el.data('k'), v = k === 're' ? (S.tool.re = !S.tool.re) : (S.tool.f[k] = !S.tool.f[k]); el.toggleClass('is-on', v).attr('aria-pressed', String(v)); },
+    smode(el) { CFG.mode = el.data('v'); saveCfg(); renderSet(); },
+    clearstorage() {
+      if (!confirm('确定清理【世界书编辑器】保存在本机的 API Key 与配置吗？\n\n（仅清理本脚本的 wbe_* 配置，绝不会影响酒馆其他设置或聊天数据）')) return;
+      try {
+        W.localStorage.removeItem(CFG_KEY);
+        Object.keys(W.localStorage).forEach(k => { if (k.startsWith('wbe_')) W.localStorage.removeItem(k); });
+        Object.keys(CFG).forEach(k => delete CFG[k]);
+        Object.assign(CFG, { mode: 'st', apiurl: '', key: '', model: '', temp: 0.7, maxTokens: 4096, style: '', presets: [] });
+        S.sort = 'idx'; S.flt = 'all';
+        renderSet();
+        if (S.tab === 'ai') renderTab('ai');
+        toast.success('已清理本脚本的配置与 API Key');
+      } catch (err) { toast.error('清理失败：' + (err.message || err)); }
+    },
+    more() { S.limit += 300; renderList(); },
+    goto(el) { if (!guard()) return; goEdit(+el.data('u')); renderList(); },
+    async setmodels() {
+      const base = CFG.apiurl.replace(/\/+$/, ''); if (!base) return toast.warning('先填写接口地址');
+      if (CFG.key && base.startsWith('http://') && !base.includes('localhost') && !base.includes('127.0.0.1')) {
+        if (!confirm('警告：您正通过非加密的 HTTP 协议发送 API Key，可能被局域网窃听，是否继续？')) return;
+      }
+      try {
+        const r = await fetch(base + '/models', { headers: CFG.key ? { Authorization: 'Bearer ' + CFG.key } : {} });
+        const j = await r.json(); S.models = (j.data || j.models || []).map(m => m.id || m.name || m).filter(Boolean).sort();
+        toast.success(`拉取到 ${S.models.length} 个模型`); renderSet();
+      } catch { toast.error('拉取失败（可能被跨域限制），请手动输入模型名'); }
+    },
+    async settest() {
+      const m = $('#wbe-setmsg', root).text('测试中…');
+      try { const t0 = Date.now(), r = await ask('你是测试助手。', '只回复：OK'); m.text(`成功（${Date.now() - t0}ms）：${String(r).slice(0, 40)}`); }
+      catch (err) { m.text('失败：' + (err.message || err)); }
+    },
+    tfind() { const h = findHits(); $('#wbe-tmsg', root).text(h.length ? `命中 ${h.length} 个条目：` + h.slice(0, 6).map(x => A.name(x.e)).join('、') + (h.length > 6 ? '…' : '') : '没有命中'); $('#wbe-tsum', root).text(h.length ? `命中 ${h.length} 条` : ''); },
+    async treplace() {
+      const h = findHits(); if (!h.length) return toast.warning('没有命中');
+      if (confirm(`将修改 ${h.length} 个条目（可撤销），继续？`)) await act(`已替换 ${h.length} 个条目`, () => apiSetEntries(S.book, h.map(x => patch(x.e, x.ch))));
+    },
+    async aikeys(el) {
+      const c = $('[name=content]', root).val(), box = $('.wbe-mainchips', root);
+      if (!c.trim()) return toast.warning('内容为空');
+      const old = el.html();
+      el.prop('disabled', true).html('<span class="nvui-spinner" aria-hidden="true"></span> 生成中…');
+      try {
+        const have = $('.wbe-mainchips .nvui-chip', root).map((_, x) => $(x).attr('data-k')).get().join('、') || '无';
+        const r = await askJSON(`你是资深的 SillyTavern 世界书编辑。\n${GUIDE}\n\n任务：根据条目内容给出 5–10 个触发关键词（含别称、简称、常见称呼；中文以 2–6 字为宜）。只输出 JSON 字符串数组，不要解释。`, `【标题】${$('[name=name]', root).val()}\n【已有关键词（不要重复）】${have}\n【内容】${c}`);
+        addChips(box, norm.keys(r).join(',')); setDirty(true);
+      } catch (err) { toast.error('生成失败：' + (err.message || err)); }
+      el.prop('disabled', false).html(old);
+    },
+    async aisec(el) {
+      const c = $('[name=content]', root).val(), name = $('[name=name]', root).val();
+      const mainKeys = $('.wbe-mainchips .nvui-chip', root).map((_, x) => $(x).attr('data-k')).get().join('、') || '无';
+      if (!c.trim()) return toast.warning('内容为空');
+      const old = el.html();
+      el.prop('disabled', true).html('<span class="nvui-spinner" aria-hidden="true"></span> 搭配中…');
+      try {
+        const r = await askJSON(SECONDARY_SYS, `【标题】${name}\n【主触发词】${mainKeys}\n【条目正文】\n${c}`);
+        const res = Array.isArray(r) ? r[0] : r;
+        if (res && res.keysSec?.length) {
+          addChips($('.wbe-secchips', root), norm.keys(res.keysSec).join(','));
+          if (res.secLogic) $('[name=seclogic]', root).val(res.secLogic);
+          setDirty(true);
+          toast.success(`已搭配 ${res.keysSec.length} 个次要词（${res.secLogic || 'and_any'}）`);
+        } else {
+          toast.info('AI 未建议补充次要关键词');
+        }
+      } catch (err) { toast.error('次要词生成失败：' + (err.message || err)); }
+      el.prop('disabled', false).html(old);
+    },
+    async airecom(el) {
+      const c = $('[name=content]', root).val(), name = $('[name=name]', root).val();
+      if (!c.trim()) return toast.warning('内容为空');
+      const out = $('#wbe-recomout', root).html('<p class="nvui-hint"><span class="nvui-spinner" aria-hidden="true"></span> AI 分析注入拓扑中…</p>');
+      try {
+        const r = await askJSON(TOPOLOGY_SYS, `【标题】${name}\n【条目正文】\n${c}`);
+        const res = Array.isArray(r) ? r[0] : r;
+        if (res && res.pos) {
+          S.lastRecom = res;
+          out.html(`<div class="wbe-card" style="border-left:3px solid var(--nvui-accent);margin-top:var(--nvui-space-1)">
+            <div class="wbe-ln"><b>推荐位置：</b><span class="nvui-badge is-accent">${esc(POS[res.pos] || res.pos)}</span> · 深度：<b>${esc(res.depth ?? 0)}</b> · 顺序：<b>#${esc(res.order ?? 100)}</b></div>
+            <div class="nvui-hint" style="margin:4px 0">${esc(res.reason || '根据内容特征智能推荐')}</div>
+            <div class="wbe-bar"><button type="button" class="nvui-btn is-sm is-primary" data-a="applyrecom">采纳推荐</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="droprecom">放弃</button></div>
+          </div>`);
+        } else {
+          out.html(''); toast.info('未能获得有效推荐');
+        }
+      } catch (err) { out.html(''); toast.error('推荐失败：' + (err.message || err)); }
+    },
+    applyrecom() {
+      const r = S.lastRecom; if (!r) return;
+      if (r.pos) $('[name=pos]', root).val(r.pos);
+      if (r.depth != null) $('[name=depth]', root).val(r.depth);
+      if (r.order != null) $('[name=order]', root).val(r.order);
+      setDirty(true);
+      $('#wbe-recomout', root).html('');
+      toast.success('已采纳推荐位置与顺序');
+    },
+    droprecom() { $('#wbe-recomout', root).html(''); },
+    async aiconflict(el) {
+      if (!S.entries.length) return toast.warning('世界书没有条目');
+      const st = $('#wbe-cf-status', root).text('AI 深度审查中，请稍候…');
+      el.prop('disabled', true);
+      try {
+        const brief = S.entries.slice(0, 150).map(e => `[UID:${e.uid}]《${A.name(e)}》: ${(e.content || '').slice(0, 180)}`).join('\n---\n');
+        const targetUids = S.checked.size ? [...S.checked] : S.entries.slice(0, 30).map(e => e.uid);
+        const targetData = S.entries.filter(e => targetUids.includes(e.uid)).map(e => `【待检条目 UID:${e.uid} 《${A.name(e)}》】\n${e.content}`).join('\n\n');
+        const r = await askJSON(CONFLICT_SYS, `【世界书基准概览】\n${brief}\n\n【重点检测目标】\n${targetData}\n\n请检测重点目标与基准概览之间是否存在逻辑硬伤与事实冲突：`);
+        S.tool.aiConflicts = Array.isArray(r) ? r : [r];
+        st.text(S.tool.aiConflicts.length ? `发现 ${S.tool.aiConflicts.length} 处潜在矛盾` : '未发现明显冲突');
+        renderConflicts();
+      } catch (err) { st.text(''); toast.error('审查失败：' + (err.message || err)); }
+      el.prop('disabled', false);
+    },
+    async bgroup() {
+      const t = picked();
+      if (!t.length) return toast.warning('请先勾选条目');
+      const g = prompt('将选中的条目归入分组（留空表示移出分组）：', t[0]?.group || '');
+      if (g === null) return;
+      await batch({ group: g.trim() }, g.trim() ? `已归入分组「${g.trim()}」` : '已移出分组');
+    },
+    async selai(el) {
+      const ta = $('[name=content]', root)[0]; if (!ta) return;
+      const i = +el.data('i'), p = i >= 0 ? SEL_AI[i][1] : (prompt('想怎么处理这段文字？') || '').trim(); if (!p) return;
+      const a = ta.selectionStart, b = ta.selectionEnd, has = b > a, src = has ? ta.value.slice(a, b) : ta.value;
+      if (!src.trim()) return toast.warning('内容为空');
+      const out = $('#wbe-selout', root).html('<p class="nvui-hint"><span class="nvui-spinner" aria-hidden="true"></span> 生成中…</p>');
+      try {
+        const r = await ask(SEL_SYS, `【要求】${p}\n\n【条目标题】${$('[name=name]', root).val()}\n\n` + (has ? `【条目全文（仅供参考，不要输出）】\n${ta.value.slice(0, 4000)}\n\n【需要处理的文字】\n${src}` : `【需要处理的全文】\n${src}`));
+        S.selRes = { book: S.book, a, b, has, text: String(r).replace(/^```\w*\n?|\n?```$/g, '').trim(), uid: S.sel };
+        out.html(`<div class="wbe-card"><div class="wbe-diff">${diff(src, S.selRes.text)}</div><div class="wbe-bar"><button type="button" class="nvui-btn is-sm is-primary" data-a="selrep">替换${has ? '选区' : '全文'}</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="selins">追加到后面</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="seldrop">放弃</button></div></div>`);
+      } catch (err) { out.html(''); toast.error('AI 调用失败：' + (err.message || err)); }
+    },
+    selrep() { const r = S.selRes, ta = $('[name=content]', root)[0]; if (!r || !ta || r.book !== S.book || r.uid !== S.sel) return; ta.value = r.has ? ta.value.slice(0, r.a) + r.text + ta.value.slice(r.b) : r.text; setDirty(true); updTok(); $('#wbe-selout', root).html(''); },
+    selins() { const r = S.selRes, ta = $('[name=content]', root)[0]; if (!r || !ta || r.book !== S.book || r.uid !== S.sel) return; ta.value = r.has ? ta.value.slice(0, r.b) + r.text + ta.value.slice(r.b) : ta.value + '\n' + r.text; setDirty(true); updTok(); $('#wbe-selout', root).html(''); },
+    seldrop() { $('#wbe-selout', root).html(''); },
+    aigo: runAI,
+    aistop() { S.ai.cancel = true; try { stopAllGeneration(); } catch { /* 忽略 */ } },
+    aiapply: applyAI,
+    aiall() { const r = S.ai.results, all = r.every(x => x.ok); r.forEach(x => (x.ok = !all)); renderAI(); },
+    undo,
+    rmchip(el) { el.closest('.nvui-chip').remove(); setDirty(true); },
+    async newbook() {
+      const n = (prompt('新世界书名称') || '').trim(); if (!n) return;
+      if (/[\\/:*?"<>|]/.test(n) || n.includes('..')) return toast.error('世界书名称不能包含路径分隔符或特殊字符');
+      await apiCreateBook(n); S.book = n; await loadBooks();
+    },
+    async delbook() {
+      if (!S.book || !confirm(`确定删除整本世界书「${S.book}」？此操作无法撤销。`)) return;
+      await apiDeleteBook(S.book); S.book = ''; await loadBooks();
+    },
+    export() {
+      const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
+      const a = D.createElement('a');
+      a.href = W.URL.createObjectURL(new Blob([JSON.stringify(S.entries, null, 2)], { type: 'application/json' }));
+      a.download = `${safeName}.entries.json`; a.click();
+    },
+    exportcsv() {
+      const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
+      const a = D.createElement('a');
+      a.href = W.URL.createObjectURL(new Blob([CSV.stringify(S.entries)], { type: 'text/csv;charset=utf-8;' }));
+      a.download = `${safeName}.csv`; a.click();
+    },
+    import() {
+      const f = $('<input type="file" accept=".json,.csv">', D);
+      f.on('change', async () => {
+        try {
+          const file = f[0].files[0];
+          if (!file) return;
+          const text = await file.text();
+          let arr = [];
+          if (file.name.toLowerCase().endsWith('.csv')) {
+            arr = CSV.parse(text).map(r => mk(r));
+          } else {
+            const raw = JSON.parse(text);
+            if (Array.isArray(raw)) arr = raw;
+            else if (raw && typeof raw.entries === 'object') arr = Object.values(raw.entries);
+            else throw new Error('无法识别的世界书 JSON 结构');
+            arr = arr.filter(r => r && typeof r === 'object').map(r => (r && (r.strategy || r.key !== undefined) ? r : mk(r)));
+          }
+          if (!arr.length) throw new Error('未读取到任何有效条目');
+          await act(`已导入 ${arr.length} 条`, () => apiCreateEntries(S.book, arr.map(({ uid, ...r }) => r)));
+        } catch (err) { toast.error('导入失败：' + err.message); }
+      }).trigger('click');
+    },
+    async new() {
+      if (!S.book) return toast.warning('请先选择或新建世界书');
+      const tp = $('#wbe-tpl', root).val() || 'blank';
+      const oldUids = new Set(S.entries.map(e => String(e.uid)));
+      const defaultGroup = (S.groupFlt && S.groupFlt !== 'all' && S.groupFlt !== '__ungrouped__') ? S.groupFlt : '';
+      await act('', () => apiCreateEntries(S.book, [mk({ name: tp === 'blank' ? '新条目' : `新${TPL[tp][0]}`, content: TPL[tp][1], group: defaultGroup })]));
+      const created = S.entries.find(e => !oldUids.has(String(e.uid)));
+      if (created) {
+        goEdit(created.uid);
+      } else {
+        const maxUid = S.entries.reduce((m, e) => (!isNaN(+e.uid) && +e.uid > m ? +e.uid : m), -1);
+        goEdit(maxUid >= 0 ? maxUid : S.entries[S.entries.length - 1]?.uid ?? null);
+      }
+    },
+    async save() {
+      if (isSaving) return;
+      const e = cur(); if (!e || S.tab !== 'entries' || S.view !== 'edit') return;
+      const c = readForm(); setDirty(false);
+      isSaving = true;
+      try {
+        await act('已保存', () => apiSetEntries(S.book, [patch(e, c)]));
+      } finally {
+        isSaving = false;
+      }
+    },
+    async dup() {
+      const e = cur(); if (!e) return;
+      const { uid, display_index, displayIndex, ...r } = JSON.parse(JSON.stringify(e));
+      r[isNew(e) ? 'name' : 'comment'] = A.name(e) + ' 副本';
+      await act('已复制', () => apiCreateEntries(S.book, [r]));
+    },
+    async del() {
+      const e = cur(); if (!e || !confirm(`删除条目「${A.name(e)}」？（可用标题栏「撤销」恢复）`)) return;
+      setDirty(false); await act('已删除', () => apiDeleteEntries(S.book, [e.uid]));
+    },
+    async applyjson() {
+      let o; try { o = JSON.parse($('[name=json]', root).val()); } catch (err) { return toast.error('JSON 格式错误：' + err.message); }
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return toast.error('JSON 必须是一个键值对象');
+      o.uid = S.sel; setDirty(false); await act('已应用', () => apiSetEntries(S.book, [o]));
+    },
+    selall() { const v = visible(), all = v.every(e => S.checked.has(e.uid)); v.forEach(e => (all ? S.checked.delete(e.uid) : S.checked.add(e.uid))); renderList(); },
+    clrsel() { S.checked.clear(); renderList(); },
+    on: () => batch({ enabled: true }, '已启用'),
+    off: () => batch({ enabled: false }, '已禁用'),
+    async border() { const n = askNum('批量设置顺序（order）为：'); if (n !== null) await batch({ order: n }, '已设置顺序'); },
+    async bdepth() { const n = askNum('批量设置深度为：'); if (n !== null) await batch({ depth: n }, '已设置深度'); },
+    async bprob() {
+      const n = askNum('批量设置概率（0-100）为：');
+      if (n !== null) {
+        const clamped = Math.min(100, Math.max(0, n));
+        await batch({ prob: clamped }, `已设置概率为 ${clamped}%`);
+      }
+    },
+    bpos: () => batch({ pos: $('#wbe-bpos', root).val() }, '已设置位置'),
+    async bdel() {
+      const t = picked();
+      if (!t.length) return toast.warning('请先勾选条目');
+      if (confirm(`删除选中的 ${t.length} 条？（可撤销）`)) await act('已删除', () => apiDeleteEntries(S.book, t.map(e => e.uid)));
+    },
+  };
+
+  // ---------- 构建界面 ----------
+  // 业务侧补充样式：只用 Kit 的 --nvui-* 令牌（无硬编码颜色 / 无 emoji / 无 !important / 无裸元素选择器）
+  const CSS = `
+  #wbe-layer{z-index:2147483647 !important;position:fixed !important;inset:0 !important;margin:0 !important}
+  #wbe-overlay{z-index:2147483647 !important}
+  #wbe-overlay *{box-sizing:border-box !important}
+  #wbe-overlay input,#wbe-overlay textarea,#wbe-overlay select{box-sizing:border-box !important;max-width:100% !important}
+  #wbe-overlay .nvui-panel{--nvui-panel-width:1240px}
+  #wbe-overlay .nvui-switch-row input[type="checkbox"]{animation:none !important}
+  #wbe-overlay .wbe-rowsw input[type="checkbox"]{animation:none !important;transition:none !important}
+  #wbe-overlay .wbe-rowsw input[type="checkbox"]::after{transition:none !important}
+  #wbe-overlay .nvui-panel-body{display:flex;flex-direction:column;overflow:hidden}
+  #wbe-overlay .nvui-tabpane.is-active{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+  #wbe-overlay .wbe-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-3) var(--nvui-space-4)}
+  #wbe-overlay .wbe-scroll::-webkit-scrollbar{display:none}
+  #wbe-overlay .wbe-scroll>div{max-width:920px;width:100%;margin:0 auto}
+  #wbe-overlay .wbe-md{flex:1 1 auto;min-height:0;display:flex;gap:var(--nvui-space-3)}
+  #wbe-overlay .wbe-list{width:340px;flex:none;display:flex;flex-direction:column;gap:var(--nvui-space-2);min-height:0}
+  #wbe-overlay .wbe-items{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-15) var(--nvui-space-1);display:flex;flex-direction:column;gap:var(--nvui-space-15)}
+  #wbe-overlay .wbe-items::-webkit-scrollbar{display:none}
+  #wbe-overlay .wbe-edit{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:var(--nvui-space-2);min-height:0}
+  #wbe-overlay .wbe-edit-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-2) var(--nvui-space-3)}
+  #wbe-overlay .wbe-edit-scroll::-webkit-scrollbar{display:none}
+  #wbe-overlay .wbe-bar{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap}
+  #wbe-overlay .wbe-bar .nvui-input{flex:1 1 auto;min-width:70px}
+  #wbe-overlay .wbe-form{display:flex;flex-direction:column;gap:var(--nvui-space-25)}
+  #wbe-overlay .wbe-field{display:flex;flex-direction:column;gap:var(--nvui-space-1);min-width:0;width:100%;color:var(--nvui-text-2);font-size:var(--nvui-fs-md)}
+  #wbe-overlay .wbe-field>.nvui-input{width:100% !important;max-width:100% !important;box-sizing:border-box !important}
+  #wbe-overlay .wbe-lbl{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap}
+  #wbe-overlay .wbe-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--nvui-space-2)}
+  #wbe-overlay .wbe-grid2.is-auto{grid-template-columns:minmax(0,1fr) auto;align-items:end}
+  #wbe-overlay .wbe-grid4{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:var(--nvui-space-2)}
+  #wbe-overlay .wbe-swbare{border-bottom:none}
+  #wbe-overlay .wbe-batch{display:none;align-items:center;gap:var(--nvui-space-15);flex-wrap:wrap;padding:var(--nvui-space-15) var(--nvui-space-2);border-radius:var(--nvui-radius-sm);background:var(--nvui-accent-bg);font-size:var(--nvui-fs-sm)}
+  #wbe-overlay .wbe-list.has-sel .wbe-batch{display:flex}
+  #wbe-overlay .wbe-row{display:flex;gap:var(--nvui-space-2);align-items:center;padding:var(--nvui-space-2) var(--nvui-space-25);cursor:pointer;border-radius:var(--nvui-radius-sm);border-left:3px solid var(--wbe-c,var(--nvui-text-3));background:var(--nvui-block-bg);transition:background-color var(--nvui-transition),border-color var(--nvui-transition)}
+  #wbe-overlay .wbe-row:hover{background:var(--nvui-block-bg-2)}
+  #wbe-overlay .wbe-row.on{background:var(--nvui-accent-bg)}
+  #wbe-overlay .wbe-row.off .wbe-mid{opacity:.45}
+  #wbe-overlay .wbe-row.dragging{opacity:.45}
+  #wbe-overlay .wbe-row.drop-before{box-shadow:inset 0 3px 0 var(--nvui-accent)}
+  #wbe-overlay .wbe-row.drop-after{box-shadow:inset 0 -3px 0 var(--nvui-accent)}
+  #wbe-overlay .wbe-row.is-constant,#wbe-overlay .wbe-hitrow.is-constant{--wbe-c:var(--nvui-info)}
+  #wbe-overlay .wbe-row.is-selective,#wbe-overlay .wbe-hitrow.is-selective{--wbe-c:var(--nvui-ok)}
+  #wbe-overlay .wbe-row.is-vectorized,#wbe-overlay .wbe-hitrow.is-vectorized{--wbe-c:var(--nvui-accent)}
+  #wbe-overlay .wbe-grip{cursor:grab;color:var(--nvui-text-3);touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
+  #wbe-overlay .wbe-grip:hover{color:var(--nvui-text)}
+  #wbe-overlay .wbe-mid{flex:1 1 auto;min-width:0}
+  #wbe-overlay .wbe-nm{font-weight:var(--nvui-fw-semibold);font-size:var(--nvui-fs-md);line-height:var(--nvui-lh-normal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #wbe-overlay .wbe-sub{font-size:var(--nvui-fs-sm);color:var(--nvui-text-3);line-height:var(--nvui-lh-normal);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #wbe-overlay .wbe-meta{font-size:var(--nvui-fs-xs);color:var(--nvui-text-3);white-space:nowrap;flex:none}
+  #wbe-overlay .wbe-rowsw{padding:0;border-bottom:none;flex:0 0 auto;margin-left:var(--nvui-space-1)}
+  #wbe-overlay .wbe-more{width:100%;margin:var(--nvui-space-1) 0}
+  #wbe-overlay #wbe-hint:empty{display:none}
+  #wbe-overlay .wbe-chips{display:flex;flex-wrap:wrap;gap:var(--nvui-space-1);padding:var(--nvui-space-15);background:var(--nvui-input-bg);border-radius:var(--nvui-radius-sm);cursor:text;width:100%;box-sizing:border-box !important}
+  #wbe-overlay .wbe-chips:focus-within{outline:var(--nvui-focus-ring-w) solid var(--nvui-focus-ring-color);outline-offset:var(--nvui-focus-ring-offset)}
+  #wbe-overlay .wbe-chips .nvui-chip{background:var(--nvui-accent-bg);color:var(--nvui-text)}
+  #wbe-overlay .wbe-chipin{flex:1 1 auto;min-width:90px;background:none;border:none;outline:none;color:var(--nvui-text);font:inherit;padding:2px var(--nvui-space-1)}
+  #wbe-overlay .wbe-chipx{display:inline-flex;align-items:center;border:none;background:none;color:inherit;cursor:pointer;padding:0 2px;font-size:var(--nvui-fs-xs);opacity:.6}
+  #wbe-overlay .wbe-chipx:hover{opacity:1}
+  #wbe-overlay .nvui-btn.is-on{background:var(--nvui-accent-bg);color:var(--nvui-accent-2)}
+  #wbe-overlay .wbe-presets{display:flex;gap:var(--nvui-space-15);flex-wrap:wrap}
+  #wbe-overlay .wbe-upr{display:inline-flex}
+  #wbe-overlay .wbe-upr .nvui-btn:first-child{border-radius:var(--nvui-radius-sm) 0 0 var(--nvui-radius-sm)}
+  #wbe-overlay .wbe-upr .wbe-upx{border-radius:0 var(--nvui-radius-sm) var(--nvui-radius-sm) 0;padding-left:var(--nvui-space-1);padding-right:var(--nvui-space-2)}
+  #wbe-overlay .wbe-card{border-radius:var(--nvui-radius);background:var(--nvui-block-bg);padding:var(--nvui-space-2) var(--nvui-space-3);margin-bottom:var(--nvui-space-2)}
+  #wbe-overlay .wbe-ahd{display:flex;align-items:center;gap:var(--nvui-space-2);cursor:pointer}
+  #wbe-overlay .wbe-card summary{cursor:pointer;font-size:var(--nvui-fs-sm);color:var(--nvui-text-3);margin-top:var(--nvui-space-1)}
+  #wbe-overlay .wbe-ln{font-size:var(--nvui-fs-md);padding:3px 0}
+  #wbe-overlay .wbe-ln s{color:var(--nvui-text-3)}
+  #wbe-overlay .wbe-diff{margin-top:var(--nvui-space-1);max-height:300px;overflow:auto;font-size:var(--nvui-fs-sm);border-radius:var(--nvui-radius-sm);background:var(--nvui-input-bg)}
+  #wbe-overlay .wbe-diff div{padding:1px var(--nvui-space-2);white-space:pre-wrap;word-break:break-word;min-height:1.4em}
+  #wbe-overlay .wbe-add{background:var(--nvui-ok-bg)}
+  #wbe-overlay .wbe-del{background:var(--nvui-danger-bg)}
+  #wbe-overlay .wbe-same{color:var(--nvui-text-3)}
+  #wbe-overlay .wbe-hrow{padding:var(--nvui-space-15) var(--nvui-space-2);margin:var(--nvui-space-1) 0;border-radius:var(--nvui-radius-sm);background:var(--nvui-block-bg);cursor:pointer}
+  #wbe-overlay .wbe-hrow:hover{background:var(--nvui-block-bg-2)}
+  #wbe-overlay .wbe-hitrow{padding:var(--nvui-space-1) var(--nvui-space-2);margin:var(--nvui-space-1) 0;border-left:3px solid var(--wbe-c,var(--nvui-text-3));background:var(--nvui-block-bg);border-radius:0 var(--nvui-radius-sm) var(--nvui-radius-sm) 0}
+  #wbe-overlay .wbe-footbar{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap;padding-top:var(--nvui-space-2);border-top:1px solid var(--nvui-glass-line);flex:none}
+  #wbe-overlay .nvui-acc-inner::before{height:var(--nvui-space-15)}
+  #wbe-overlay textarea.nvui-input{resize:vertical;line-height:var(--nvui-lh-relaxed);width:100% !important;max-width:100% !important;box-sizing:border-box !important;margin:0}
+  #wbe-overlay .wbe-big{min-height:260px;width:100% !important;max-width:100% !important}
+  #wbe-overlay .wbe-probe{width:100% !important;max-width:100% !important;min-height:120px;box-sizing:border-box !important;margin:var(--nvui-space-1) 0}
+  #wbe-overlay .wbe-back{display:none}
+  @media(max-width:600px){
+    #wbe-overlay .wbe-md{flex-direction:column}
+    #wbe-overlay .wbe-list{width:100%;flex:1 1 auto}
+    #wbe-overlay .wbe-md:not(.show-edit) .wbe-edit{display:none}
+    #wbe-overlay .wbe-md.show-edit .wbe-list{display:none}
+    #wbe-overlay .wbe-md.show-edit .wbe-back{display:inline-flex}
+    #wbe-overlay .wbe-grid4{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+    #wbe-overlay .wbe-grid2{grid-template-columns:minmax(0,1fr)}
+    #wbe-overlay .wbe-grid2.is-auto{grid-template-columns:minmax(0,1fr) auto}
+  }`;
+
+  async function build() {
+    if (built) return;
+    await ensureNVUI();
+    $('<style id="wbe-style"></style>', D).text(CSS).appendTo(D.head);
+    panel = NVUI.createPanel({
+      id: 'wbe',
+      title: '世界书编辑器',
+      version: 'v0.5',
+      mount: D.body,
+      tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
+      actions: [{ icon: 'fa-solid fa-rotate-left', label: '撤销', onClick: () => actions.undo() }],
+      onClose() { setDirty(false); $('#wbe-md', root).removeClass('show-edit'); },
+    });
+    panel.dialog.classList.add('nvui-scope');
+    root = $(panel.panel);
+    closeBtnEl = panel.panel.querySelector('.nvui-panel-actions').lastElementChild;
+    built = true;
+
+    // —— 四个分区的静态骨架 ——
+    $('#wbe-pane-entries', panel.body).html(`<div class="wbe-md" id="wbe-md">
+      <div class="wbe-list" id="wbe-list">
+        <div class="wbe-bar">
+          <select id="wbe-book" class="nvui-input" aria-label="选择世界书"></select>
+          <button type="button" class="nvui-icon-btn" data-a="newbook" title="新建世界书" aria-label="新建世界书">${ico('fa-plus')}</button>
+          <button type="button" class="nvui-icon-btn" data-a="delbook" title="删除世界书" aria-label="删除世界书">${ico('fa-trash')}</button>
+          <button type="button" class="nvui-icon-btn" data-a="import" title="导入条目 (JSON / CSV)" aria-label="导入条目">${ico('fa-file-import')}</button>
+          <button type="button" class="nvui-icon-btn" data-a="export" title="导出 JSON" aria-label="导出 JSON">${ico('fa-file-code')}</button>
+          <button type="button" class="nvui-icon-btn" data-a="exportcsv" title="导出 CSV 表格 (Excel 兼容)" aria-label="导出 CSV">${ico('fa-file-csv')}</button>
+        </div>
+        <div class="wbe-bar"><input id="wbe-q" class="nvui-input" placeholder="搜索标题、关键词、分组、内容" aria-label="搜索条目"></div>
+        <div class="wbe-bar"><select id="wbe-gflt" class="nvui-input" aria-label="按分组筛选"></select></div>
+        <div class="wbe-bar">
+          <select id="wbe-flt" class="nvui-input" aria-label="按类型筛选">${[['all', '全部类型'], ['constant', '常驻'], ['selective', '关键词'], ['vectorized', '向量'], ['off', '已禁用']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select>
+          <select id="wbe-sort" class="nvui-input" aria-label="排序方式">${[['idx', '显示顺序（可拖拽）'], ['order', '按 order（可拖拽）'], ['name', '按标题'], ['tok', '按长度']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select>
+          <select id="wbe-tpl" class="nvui-input" title="新建条目使用的模板" aria-label="新建条目模板">${Object.entries(TPL).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select>
+          <button type="button" class="nvui-btn is-primary is-sm" data-a="new">${ico('fa-plus')}条目</button>
+        </div>
+        <div class="wbe-batch"><b id="wbe-selcnt"></b>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="on">启用</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="off">禁用</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="bgroup">归组</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="border">顺序</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="bdepth">深度</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="bprob">概率</button>
+          <select id="wbe-bpos" class="nvui-input" aria-label="批量设置位置"></select>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="bpos">设位置</button>
+          <button type="button" class="nvui-btn is-sm is-secondary" data-a="aibatch">${ico('fa-wand-magic-sparkles')}AI</button>
+          <button type="button" class="nvui-btn is-sm is-danger" data-a="bdel">删除</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="clrsel">取消选择</button>
+        </div>
+        <div class="wbe-bar"><span class="nvui-hint" id="wbe-count"></span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="selall">全选 / 取消</button></div>
+        <div id="wbe-hint" class="nvui-hint"></div>
+        <div id="wbe-items" class="wbe-items"></div>
+      </div>
+      <div class="wbe-edit">
+        <div class="wbe-bar" id="wbe-ebar"></div>
+        <div class="wbe-edit-scroll" id="wbe-ebody"></div>
+        <div class="wbe-footbar" id="wbe-efoot"></div>
+      </div>
+    </div>`);
+    $('#wbe-pane-ai', panel.body).html('<div class="wbe-scroll"><div id="wbe-ai" class="wbe-fai"></div></div>');
+    $('#wbe-pane-tool', panel.body).html('<div class="wbe-scroll"><div id="wbe-tool" class="wbe-ftool"></div></div>');
+    $('#wbe-pane-set', panel.body).html('<div class="wbe-scroll"><div id="wbe-set" class="wbe-fset"></div></div>');
+
+    // —— 顶部 tabs / 手机底部导航共享同一份状态；这里挂业务侧守卫与懒渲染 ——
+    const userTab = key => {
+      if (key === S.tab) return;
+      if (!guard()) { panel.setTab(S.tab); return; }
+      setDirty(false);
+      if (key === 'ai') S.ai.scope = S.checked.size && S.ai.scope === 'cur' ? 'sel' : !S.checked.size && S.ai.scope === 'sel' ? 'cur' : S.ai.scope;
+      activateTab(key);
+    };
+    panel.tabs && [...panel.tabs.querySelectorAll('.nvui-tab')].forEach((b, i) => b.addEventListener('click', () => userTab(TABS[i][0])));
+    panel.bottomNav && [...panel.bottomNav.querySelectorAll('.nvui-bottom-nav-item')].forEach((b, i) => b.addEventListener('click', () => userTab(TABS[i][0])));
+
+    // —— 未保存守卫：捕获阶段拦截 Esc / 点遮罩 / 关闭按钮（createPanel 的内建关闭在前） ——
+    capKey = ev => {
+      if (!panel || panel.overlay.hidden || ev.key !== 'Escape' || !panel.panel.contains(ev.target)) return;
+      if ($(ev.target).is('select') || !guard()) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+    };
+    D.addEventListener('keydown', capKey, true);
+    capClick = ev => {
+      if (!panel || panel.overlay.hidden) return;
+      if ((ev.target === panel.overlay || closeBtnEl.contains(ev.target)) && !guard()) ev.stopPropagation();
+    };
+    panel.dialog.addEventListener('click', capClick, true);
+
+    // —— 事件委托 ——
+    root.on('click', '[data-a]', function (ev) { const f = actions[$(this).data('a')]; f && f($(this), ev); });
+    root.on('click', '.nvui-acc-head', function () {
+      const open = $(this).closest('.nvui-acc').toggleClass('is-open').hasClass('is-open');
+      $(this).attr('aria-expanded', String(open));
+    });
+    root.on('click', '.wbe-chk', function (ev) {
+      ev.stopPropagation();
+      const u = +$(this).closest('.wbe-row').data('uid');
+      this.checked ? S.checked.add(u) : S.checked.delete(u);
+      $('#wbe-list', root).toggleClass('has-sel', S.checked.size > 0);
+      $('#wbe-selcnt', root).text(`已选 ${S.checked.size} 项`);
+    });
+    root.on('click', '.wbe-rowsw', ev => ev.stopPropagation());
+    root.on('change', '.wbe-sw', function () {
+      const e = S.entries.find(x => x.uid === +$(this).closest('.wbe-row').data('uid'));
+      if (e) act('', () => apiSetEntries(S.book, [patch(e, { enabled: !A.enabled(e) })]));
+    });
+    root.on('click', '.wbe-grip', ev => ev.stopPropagation());
+    root.on('pointerdown', '.wbe-grip', function (ev) { const oe = ev.originalEvent || ev; if (oe.button) return; ev.preventDefault(); startDrag(oe, $(this).closest('.wbe-row')[0]); });
+    root.on('click', '.wbe-row', function () { select(+$(this).data('uid')); });
+    root.on('click', '.wbe-chips', function () { $('.wbe-chipin', this).trigger('focus'); });
+    root.on('keydown', '.wbe-chipin', function (ev) {
+      const box = $(this).closest('.wbe-chips');
+      if (ev.isComposing) return;
+      if (ev.key === 'Enter' || ev.key === ',' || ev.key === '，') {
+        ev.preventDefault();
+        if (this.value.trim()) { addChips(box, this.value.trim()); this.value = ''; setDirty(true); }
+      } else if (ev.key === 'Backspace' && !this.value) { $('.nvui-chip', box).last().remove(); setDirty(true); }
+    });
+    root.on('focusout', '.wbe-chipin', function () {
+      if (this.value.trim()) { addChips($(this).closest('.wbe-chips'), this.value.trim()); this.value = ''; setDirty(true); }
+    });
+    root.on('input change', '.wbe-fedit :input, .wbe-fai :input, .wbe-fset :input, .wbe-ftool :input', function (ev) {
+      if (isRendering) return;
+      if (this.name === 'probe') return scheduleTest();
+      if ($(this).closest('.wbe-fai').length) return aiSync(this);
+      if ($(this).closest('.wbe-fset').length) return ev.type === 'change' && cfgSync(this);
+      if ($(this).closest('.wbe-ftool').length) return toolSync(this);
+      if (this.classList.contains('wbe-chipin')) return;
+      setDirty(true); updTok();
+    });
+    let qt; root.on('input', '#wbe-q', function () { const v = this.value; clearTimeout(qt); qt = setTimeout(() => { S.q = v; S.limit = 300; renderList(); }, 120); });
+    root.on('change', '#wbe-flt,#wbe-sort,#wbe-gflt', function () {
+      if (isRendering) return;
+      if (this.id === 'wbe-gflt') {
+        S.groupFlt = CFG.groupFlt = this.value;
+        saveCfg();
+        S.limit = 300;
+        renderList();
+        return;
+      }
+      const k = this.id === 'wbe-flt' ? 'flt' : 'sort';
+      S[k] = CFG[k] = this.value; saveCfg(); S.limit = 300; renderList();
+    });
+    root.on('change', '#wbe-tpl', function () {
+      if (isRendering) return;
+      CFG.tpl = this.value; saveCfg();
+    });
+    root.on('change', '#wbe-book', async function () {
+      if (isRendering) return;
+      if (this.value === S.book) return;
+      if (!guard()) { renderTop(); return; }
+      S.book = this.value; S.sel = null; setDirty(false); await loadEntries();
+    });
+    $(D).on('keydown.wbe', ev => {
+      if (!panel || panel.overlay.hidden || !panel.panel.contains(ev.target)) return;
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') { ev.preventDefault(); actions.save(); }
+      else if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && S.tab === 'ai') { ev.preventDefault(); runAI(); }
+      else if (ev.altKey && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp')) {
+        ev.preventDefault(); const v = visible(), n = v[v.findIndex(e => e.uid === S.sel) + (ev.key === 'ArrowDown' ? 1 : -1)]; if (n) ev.shiftKey ? commitMove(S.sel, n.uid, ev.key === 'ArrowDown') : select(n.uid);
+      } else if (ev.altKey && ev.key.toLowerCase() === 'n') { ev.preventDefault(); actions.new(); }
+    });
+
+    render();
+    renderTab('ai'); renderTab('tool'); renderTab('set');
+    S.tab = 'entries';
+  }
+
+  let isOpenLoading = false;
+  // ---------- 置顶：面板必须压过酒馆主界面（移动端聊天列 / 其它扩展浮层） ----------
+  // 面板层级通过 CSS 与内联样式固定最高 z-index（2147483647），避免被酒馆元素遮挡。
+  // 注意：严禁在已打开状态下调用 dlg.close()+dlg.show() 或定时器反复重开，否则会导致界面剧烈闪烁跳动。
+  const ZMAX = '2147483647';
+  function raisePanel() {
+    if (!panel) return;
+    const dlg = panel.dialog, ov = panel.overlay;
+    try {
+      if (!dlg.open) {
+        try { dlg.show(); } catch { dlg.setAttribute('open', ''); }
+      }
+      dlg.style.zIndex = ZMAX;
+      if (ov) ov.style.zIndex = ZMAX;
+      const p = panel.panel;
+      if (p) p.style.zIndex = ZMAX;
+    } catch { /* 忽略 */ }
+  }
+  // 遮挡自检：面板中心点最上层的元素是否属于面板自身；不是则说明仍被酒馆元素压住
+  function checkOccluded() {
+    try {
+      if (!panel || panel.overlay.hidden) return null;
+      const p = panel.panel;
+      if (!p) return null;
+      const r = p.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      const hit = D.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (!hit) return null;
+      if (p.contains(hit) || dlgContains(hit)) return null;
+      const info = { tag: hit.tagName, id: hit.id || '', cls: (hit.className && hit.className.baseVal !== undefined ? hit.className.baseVal : String(hit.className || '')).slice(0, 120) };
+      console.warn('[WBE] 面板仍被遮挡，遮挡元素：', info, hit);
+      return info;
+    } catch (err) { return null; }
+  }
+  function dlgContains(el) { try { return panel && panel.dialog.contains(el); } catch { return false; } }
+
+  async function open() {
+    try { await build(); } catch (err) { console.error(err); return toastr.error('界面加载失败：' + (err.message || err)); }
+    $('#wbe-md', root).removeClass('show-edit');
+    panel.open();
+    panel.syncIndicator();
+    raisePanel();
+    setTimeout(() => {
+      const bad = checkOccluded();
+      if (bad) console.warn('[WBE] 顶栏层级异常，遮挡元素：', bad);
+    }, 500);
+    if (isOpenLoading) return;
+    isOpenLoading = true;
+    try {
+      await loadBooks();
+    } catch (err) {
+      console.error('[世界书编辑器读取失败]', err);
+      toast.error('读取世界书失败：' + (err.message || err));
+    } finally {
+      isOpenLoading = false;
+    }
+  }
+
+  let attachItv = null, attachTimeout = null;
+  // ---------- 清理（重复启用脚本 / 页面卸载时） ----------
+  W.__wbeOpen = open;
+  W.__wbeRaise = () => { raisePanel(); return checkOccluded() || '已提升到最上层'; };
+  W.__wbeTeardown = () => {
+    $(D).off('keydown.wbe');
+    if (capKey) D.removeEventListener('keydown', capKey, true);
+    if (capClick && panel) panel.dialog.removeEventListener('click', capClick, true);
+    if (attachItv) clearInterval(attachItv);
+    if (attachTimeout) clearTimeout(attachTimeout);
+    if (tokTimer) clearTimeout(tokTimer);
+    if (probeTimer) clearTimeout(probeTimer);
+    try { panel && typeof panel.destroy === 'function' && panel.destroy(); } catch { /* 忽略 */ }
+    $('#wbe-root,#wbe-layer,#wbe-style,#wbe-menu', D).remove();
+    W.__wbeTeardown = null;
+    W.__wbeOpen = null;
+  };
+
+  function attachMenu() {
+    if (D.getElementById('wbe-menu')) return true;
+    const menu = $('#extensionsMenu', D);
+    if (menu.length) {
+      $('<div id="wbe-menu" class="list-group-item flex-container flexGap5"><div class="fa-solid fa-book-open extensionsMenuExtensionButton"></div>世界书编辑器</div>', D)
+        .on('click', open).appendTo(menu);
+      return true;
+    }
+    return false;
+  }
+  if (!attachMenu()) {
+    attachItv = setInterval(() => { if (attachMenu()) { clearInterval(attachItv); attachItv = null; } }, 1000);
+    attachTimeout = setTimeout(() => { if (attachItv) clearInterval(attachItv); }, 30000);
+  }
+  try { eventOnButton('世界书编辑器', open); } catch { /* 当前版本没有脚本按钮事件时忽略 */ }
+  $(window).on('pagehide', () => { W.__wbeTeardown && W.__wbeTeardown(); });
+})();
