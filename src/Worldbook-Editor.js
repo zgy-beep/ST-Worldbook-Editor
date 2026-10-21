@@ -7,7 +7,7 @@ export function initializeEditor(runtime) {
   let NVUI = null;
   async function ensureNVUI() {
     const api = runtime.NVUI;
-    if (!api || api.version !== '2.5.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.5.0');
+    if (!api || api.version !== '2.6.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.6.0');
     NVUI = api;
     return api;
   }
@@ -581,7 +581,20 @@ ${GUIDE}
       </div>`;
   }
   function renderSet() {
-    $('#wbe-set', root).html(setHTML());
+    const host = $('#wbe-set', root)[0];
+    if (!host) return;
+    // 重绘会生成全新的折叠条节点，Kit 的注册随旧节点一起丢失；
+    // 而 Kit 重放的是 createPanel 时的旧快照，会盖掉用户当前的开合状态，
+    // 所以先在旧 DOM 上记录，重绘 + 重新接管后再还原。
+    const prevOpen = {};
+    host.querySelectorAll('.nvui-acc[id]').forEach(a => { prevOpen[a.id] = a.classList.contains('is-open'); });
+    host.innerHTML = setHTML();
+    adoptAccordions(host);
+    host.querySelectorAll('.nvui-acc[id]').forEach(a => {
+      if (typeof prevOpen[a.id] !== 'boolean') return;
+      if (typeof a.setOpen === 'function') a.setOpen(prevOpen[a.id]);
+      else a.classList.toggle('is-open', prevOpen[a.id]);
+    });
   }
   function cfgSync(el) {
     const n = el.name;
@@ -849,7 +862,7 @@ ${GUIDE}
     $('#wbe-items', root).html(v.slice(0, S.limit).map(e => {
       const t = A.type(e), on2 = A.enabled(e), g = A.group(e);
       return `<div class="wbe-row ${(TYPE[t] || [])[1] || ''}${String(e.uid) === String(S.sel) ? ' on' : ''}${on2 ? '' : ' off'}" data-uid="${esc(e.uid)}">
-        ${drag ? `<span class="wbe-grip" title="按住拖动排序">${ico('fa-grip-vertical')}</span>` : ''}<input type="checkbox" class="wbe-chk" ${S.checked.has(e.uid) ? 'checked' : ''} aria-label="选择条目">
+        ${drag ? `<span class="wbe-grip" title="按住拖动排序">${ico('fa-grip-vertical')}</span>` : ''}<input type="checkbox" class="nvui-checkbox wbe-chk" ${S.checked.has(e.uid) ? 'checked' : ''} aria-label="选择条目">
         <div class="wbe-mid">
           <div class="wbe-nm">${esc(A.name(e) || '（无标题）')} ${g ? `<span class="nvui-badge">${esc(g)}</span>` : ''}</div>
           <div class="wbe-sub">${t === 'constant' ? '常驻' : esc(A.keys(e).join(', ') || '无主词')}${A.keysSec(e).length ? ` <span class="nvui-muted">+次要词(${A.keysSec(e).length})</span>` : ''}</div>
@@ -997,45 +1010,25 @@ ${GUIDE}
     if (newRow) newRow.classList.add('on');
   }
   /**
-   * 折叠条开合状态持久化。
+   * 折叠条开合状态持久化 —— 交给 Kit v2.6.0 的 panel.adoptAccordions()。
    *
-   * Kit 的 persist.accordion 只覆盖「经 panel.addAccordion() / addNode() 注册」的折叠条 ——
-   * 那条路径要求节点带 Kit 工厂产出的 setOpen 方法。而我们的折叠条是业务 HTML 字符串
-   * 经 innerHTML 注入的纯 DOM，绕过了注册机制，于是 Kit 存下来的 accordion 状态是空对象，
-   * 折叠状态永远记不住（实测 layout 里 accordion: {}）。
-   *
-   * 这里自行持久化到扩展设置的 layout 命名空间，键名与 Kit 的 nvui_state_* 互不干扰。
+   * 历史上 Kit 的 persist.accordion 只覆盖经 panel.addAccordion() / addNode() 注册的
+   * 折叠条，而本扩展的折叠条是业务 HTML 字符串经 innerHTML 注入的纯 DOM，绕过了注册，
+   * 于是状态存成空对象。v2.6.0 补了接管入口（GitHub issue #11），这里直接复用：
+   *   - adoptAccordions 会为纯 DOM 折叠条补 setOpen，并给 .nvui-acc-head 绑 click 落盘；
+   *   - 默认 bind:false（不接管点击），开合仍由本扩展的委托监听负责，避免双重 toggle。
+   * 稳定键取节点自身的 id（wbe-acc-*），DOM 顺序变化不会错位。
    */
-  const ACC_STATE_KEY = 'wbe_acc_state';
-  function saveAccState() {
-    const state = {};
-    root.find('.nvui-acc').each(function () {
-      const id = this.id;
-      if (!id) return;
-      state[id] = this.classList.contains('is-open');
-    });
+  function adoptAccordions(scope) {
+    if (!panel || typeof panel.adoptAccordions !== 'function') return 0;
+    const host = scope || panel.body;
+    if (!host) return 0;
     try {
-      runtime.layoutStorage.set(ACC_STATE_KEY, state);
+      return panel.adoptAccordions(host);
     } catch (err) {
-      console.warn('[ST-Worldbook-Editor] 保存折叠条状态失败', err);
+      console.warn('[ST-Worldbook-Editor] 接管折叠条失败', err);
+      return 0;
     }
-  }
-  function restoreAccState() {
-    let state = null;
-    try {
-      state = runtime.layoutStorage.get(ACC_STATE_KEY);
-    } catch (err) {
-      console.warn('[ST-Worldbook-Editor] 读取折叠条状态失败', err);
-      return;
-    }
-    if (!state || typeof state !== 'object') return;
-    root.find('.nvui-acc').each(function () {
-      const id = this.id;
-      if (!id || typeof state[id] !== 'boolean') return;
-      this.classList.toggle('is-open', state[id]);
-      const head = this.querySelector('.nvui-acc-head');
-      if (head) head.setAttribute('aria-expanded', String(state[id]));
-    });
   }
   /**
    * 把编辑区顶部（标题栏）带入 Kit 唯一滚动层的可视区。
@@ -1374,7 +1367,7 @@ ${GUIDE}
       version: 'v0.6.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
-      // 2.5.0 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
+      // 2.6.0 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
       persist: { size: true, tab: true, accordion: true, storage: runtime.layoutStorage },
       themeToggle: true,
       onThemeChange(theme) { panel.dialog.classList.toggle('nvui-theme-light', theme === 'light'); },
@@ -1436,8 +1429,8 @@ ${GUIDE}
     $('#wbe-pane-ai', panel.body).html(`<div id="wbe-ai" class="wbe-fai wbe-page">${aiHTML()}</div>`);
     $('#wbe-pane-tool', panel.body).html(`<div id="wbe-tool" class="wbe-ftool wbe-page">${toolHTML()}</div>`);
     $('#wbe-pane-set', panel.body).html(`<div id="wbe-set" class="wbe-fset wbe-page">${setHTML()}</div>`);
-    // 恢复上次会话的折叠条开合状态（Kit 的 persist.accordion 覆盖不到 innerHTML 注入的折叠条）
-    restoreAccState();
+    // 把 innerHTML 注入的折叠条交给 Kit 接管（持久化），点击仍由本扩展委托监听处理
+    adoptAccordions();
 
     // —— 顶部 tabs / 手机底部导航共享同一份状态；Kit 负责切换显示，这里只做未保存守卫与状态镜像 ——
     const navKeyOf = ev => {
@@ -1483,9 +1476,14 @@ ${GUIDE}
     // —— 事件委托 ——
     root.on('click', '[data-a]', function (ev) { const f = actions[$(this).data('a')]; f && f($(this), ev); });
     root.on('click', '.nvui-acc-head', function () {
-      const open = $(this).closest('.nvui-acc').toggleClass('is-open').hasClass('is-open');
-      $(this).attr('aria-expanded', String(open));
-      saveAccState();
+      // 改走 Kit 的 setOpen：它被 registerAccordionItem 包装过，会触发持久化落盘；
+      // 直接 toggleClass 则绕过了这套钩子。
+      const acc = $(this).closest('.nvui-acc')[0];
+      if (acc && typeof acc.setOpen === 'function') acc.setOpen(!acc.classList.contains('is-open'));
+      else if (acc) {
+        const open = $(acc).toggleClass('is-open').hasClass('is-open');
+        $(this).attr('aria-expanded', String(open));
+      }
     });
     root.on('click', '.wbe-chk', function (ev) {
       ev.stopPropagation();

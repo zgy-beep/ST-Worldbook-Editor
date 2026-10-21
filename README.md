@@ -1,6 +1,6 @@
 # SillyTavern 世界书编辑器 (ST-Worldbook-Editor)
 
-基于 **SillyTavern NVUI Kit v2.5.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
+基于 **SillyTavern NVUI Kit v2.6.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
@@ -12,7 +12,7 @@
 
 ## 功能特性
 
-- **NVUI Kit v2.5.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
+- **NVUI Kit v2.6.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
 - **世界书条目全生命周期管理**：新建、删除、编辑、实时预览、字数与 Token 估算；支持常驻、选择性触发、向量化等条目机制。
 - **批量操作**：多选、批量启用/禁用、批量分组、调整顺序、深度与触发概率。
 - **双向数据兼容**：兼容 SillyTavern 原生条目的 `disable`、`constant`、`selective`、`vectorized`、数值型 `position`，并在需要时映射到新的 `strategy` / `position` 结构。
@@ -142,7 +142,7 @@ ST-Worldbook-Editor/
 │  └─ styles/
 │     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
 │     └─ host-isolation.css  # 宿主样式隔离层（唯一允许 !important 的文件）
-├─ ui-kit/                   # NVUI Kit v2.5.0 本地运行时与样式资产（自包含独立项目）
+├─ ui-kit/                   # NVUI Kit v2.6.0 本地运行时与样式资产（自包含独立项目）
 └─ test/                     # 项目测试与浏览器端到端冒烟
 ```
 
@@ -151,55 +151,46 @@ ST-Worldbook-Editor/
 
 ### 宿主样式隔离层
 
-`src/styles/host-isolation.css` 是全项目**唯一**允许使用 `!important` 的文件，
-职责单一：夺回宿主主题夺走的表单控件配色。
+`src/styles/host-isolation.css` 是全项目**唯一**允许使用 `!important` 的文件。
 
-某些酒馆第三方主题会用「元素选择器 + `!important`」重写全局表单控件：
+> **v2.6.0 起已大幅收窄**：`.nvui-input` / `select` / `textarea` / `option` 的宿主隔离
+> 由 NVUI Kit 自己内置（`dialog.nvui-tl` + `.nvui-panel` 双载体，[issue #9](https://github.com/zgy-beep/ui-kit/issues/9) 已闭环），
+> 本扩展不再重复实现。
 
-```css
-input[type="text"], input:not([type]), textarea:not([type="search"]) {
-  background-color: var(--ui-color-sec) !important;   /* 宿主主题色 */
-}
-select {
-  background-color: var(--ui-color-sec) !important;
-  border: 1px solid ... !important;
-}
-```
+现在该文件只负责 Kit 按设计覆盖不到的**业务自有控件** `.wbe-chipin`（关键词输入框）：
 
-Kit 的 `.nvui-input` 是裸类选择器（特异性 0,1,0），赢不过宿主的 `!important`。
-结果是面板切到浅色主题后，输入框背景仍是宿主深色，而文字颜色仍走 Kit 的
-`--nvui-text`（浅色主题下是深色），最终呈现「深底 + 深字」，完全看不清。
+- 它不是 `.nvui-input`，Kit 的隔离层不会命中它；
+- 它**没有 `type` 属性**，恰好落进宿主主题的 `input:not([type])` 规则，
+  浅色主题下会变成一块突兀的深色长条（实测 `rgb(46,46,52)`）；
+- 它在 CSS 里的语义本就是「透明地嵌在 `.wbe-chips` 容器里」（底色由容器提供），
+  隔离层把它显式还原为透明。
 
-隔离层用 `#wbe-overlay` 作用域 + `!important` 定向夺回控制权：只影响本扩展面板，
-只恢复 Kit 组件自己的 token 取值，浅色 / 深色主题自动跟随。
-
-> **上游跟进**：NVUI Kit 的「§8 SillyTavern 宿主兼容红线」目前只隔离了 checkbox，
-> 未覆盖 `input` / `select` / `textarea`，且 kit 没有 `select option` 的皮肤。
-> 已向上游提交 issue 请求根治：
-> [zgy-beep/ui-kit#9 — 宿主主题以 !important 重写全局表单控件，导致 kit 表单组件失去 token 配色](https://github.com/zgy-beep/ui-kit/issues/9)
+选 `!important` 的原因：宿主声明本身带 `!important`，只有同样带 `!important`
+且特异性更高的规则才能赢。这是本文件存在的唯一理由。
 
 ### 折叠条开合状态持久化
 
-Kit 的 `persist.accordion` 只覆盖「经 `panel.addAccordion()` / `addNode()` 注册」的折叠条 ——
-那条路径要求节点带 Kit 工厂产出的 `setOpen` 方法。而本扩展的折叠条是业务 HTML 字符串
-经 `innerHTML` 注入的纯 DOM，绕过了注册机制，实测 Kit 存下来的 `accordion` 状态是**空对象**。
+v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.com/zgy-beep/ui-kit/issues/11) 已闭环）：
 
-因此本扩展自行持久化到扩展设置的 `layout` 命名空间（键 `wbe_acc_state`，与 Kit 的
-`nvui_state_*` 互不干扰）：折叠条带稳定 id，点击时写入，面板重建时恢复。
-
-> **上游跟进**：已请求 Kit 暴露公开的折叠条注册 API，让「插件自行注入面板内容」这一主流用法
-> 也能享受 Kit 的持久化能力：
-> [zgy-beep/ui-kit#11 — accordion 折叠状态只对经 addAccordion/addNode 注册的组件生效](https://github.com/zgy-beep/ui-kit/issues/11)
+- 折叠条带稳定 `id`（`wbe-acc-api` / `-style` / `-find` / `-probe` / `-health`），
+  Kit 直接用节点 id 作为存储键，DOM 顺序变化不会错位；
+- 状态存在 Kit 自己的 `nvui_state_wbe.accordion` 里，走 `runtime.layoutStorage` 落盘；
+- `adoptAccordions` 默认 `bind: false`（不接管点击，避免与扩展的委托监听形成双重 toggle），
+  开合仍由扩展的 `click` 委托负责，但它改调 `setOpen()` —— 该方法被 Kit 包装过，会触发落盘；
+- 设置页因切换 API 模式会整页重绘，`renderSet()` 在重绘后重新 `adoptAccordions()`，
+  并记录 / 还原本地开合状态（否则 Kit 会重放 createPanel 时的旧快照，盖掉用户当前状态）。
 
 ### 批量选择复选框
 
-NVUI Kit 目前只有「胶囊开关」（`.nvui-switch-row`），**没有独立的小方块 checkbox 组件**。
-本扩展的 `.wbe-chk` 是业务侧自绘：沿用 Kit 的令牌与「宿主 checkbox 必须隔离」的思路
-（`appearance:none` + 显式尺寸 + 压掉宿主 `::before` 对勾）。
+直接复用 Kit v2.6.0 的 `.nvui-checkbox`（[issue #10](https://github.com/zgy-beep/ui-kit/issues/10) 已闭环）：
 
-> **上游跟进**：已请求 Kit 补齐标准 checkbox 组件，避免每个下游插件重复实现：
-> [zgy-beep/ui-kit#10 — 没有独立的 checkbox 组件](https://github.com/zgy-beep/ui-kit/issues/10)
+```html
+<input type="checkbox" class="nvui-checkbox wbe-chk">
+```
 
+16px 小方块、元素级宿主隔离（`.nvui-checkbox[type="checkbox"]`，0,2,0）、
+支持 `:checked` / `:indeterminate` / 焦点环 / `disabled`。
+`.wbe-chk` 仅保留为业务事件委托的钩子，扩展不再重画皮肤。
 
 ### 运行时接口
 
@@ -211,7 +202,7 @@ NVUI Kit 目前只有「胶囊开关」（`.nvui-switch-row`），**没有独立
   saveSettings(),  // 调用宿主 saveSettingsDebounced
   getHelper(),     // 实时读取 window.TavernHelper，未检测到返回 null；不缓存、不硬编码安装目录
   layoutStorage,   // { get(key), set(key, value), remove(key) }
-  NVUI,            // 本地 NVUI Kit 2.5.0 实例
+  NVUI,            // 本地 NVUI Kit 2.6.0 实例
   resetSettings(), // 只清本扩展命名空间与旧 wbe_settings_v1
 }
 ```
@@ -227,7 +218,7 @@ NVUI Kit 目前只有「胶囊开关」（`.nvui-switch-row`），**没有独立
 - 最低 SillyTavern 客户端版本：`1.17.0`（`manifest.json` 的 `minimum_client_version`）。`activate` / `disable` 等 manifest 生命周期钩子从 1.17.0 开始提供，与本文使用的生命周期一致。
 - 生命周期使用标准扩展钩子：`activate` → `init`，`disable` → `onDisable`。
 - 启动等待 `APP_READY`；如果扩展在 `APP_READY` 之后才加载，事件源会补发该事件。清理后再次初始化可重新创建菜单与面板。
-- NVUI Kit：`2.5.0`，随扩展本地提供。
+- NVUI Kit：`2.6.0`，随扩展本地提供。
 - 不新增网络 CDN 依赖。
 - 酒馆助手不是 `manifest.dependencies` 中的硬编码扩展目录依赖：本扩展在运行时检查 `window.TavernHelper`，避免酒馆助手安装目录改名后失效。
 

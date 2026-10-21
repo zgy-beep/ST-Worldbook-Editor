@@ -1,7 +1,7 @@
 /**
  * 世界书编辑器 v0.6.0 · 业务样式
  * ------------------------------------------------------------------
- * 设计基底：本地 SillyTavern NVUI Kit v2.5.0。
+ * 设计基底：本地 SillyTavern NVUI Kit v2.6.0。
  * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
  *
  * 约束（本文件）：
@@ -266,50 +266,9 @@
     color: var(--nvui-text);
 }
 
-/*
- * 批量选择复选框。
- *
- * NVUI Kit 目前只有「胶囊开关」（.nvui-switch-row），没有独立的小方块 checkbox 组件，
- * 这套是业务侧自绘：沿用 Kit 的令牌，以及 Kit「宿主 checkbox 必须隔离」的思路
- * （appearance:none + 显式尺寸 + 压掉宿主 ::before 对勾）。
- * 上游跟进：已提 issue 请求补齐标准 checkbox 组件。
- */
-#wbe-overlay .wbe-chk {
-    appearance: none;
-    -webkit-appearance: none;
-    flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    border: 1px solid var(--nvui-line-2);
-    border-radius: var(--nvui-radius-sm);
-    background: var(--nvui-input-bg);
-    cursor: pointer;
-    position: relative;
-    transition: background-color var(--nvui-transition), border-color var(--nvui-transition);
-}
-
-#wbe-overlay .wbe-chk:checked {
-    background: var(--nvui-accent);
-    border-color: var(--nvui-accent);
-}
-
-#wbe-overlay .wbe-chk:checked::after {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: 1px;
-    width: 4px;
-    height: 8px;
-    border: solid var(--nvui-on-accent);
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-}
-
-#wbe-overlay .wbe-chk:focus-visible {
-    outline: var(--nvui-focus-ring-w) solid var(--nvui-focus-ring-color);
-    outline-offset: var(--nvui-focus-ring-offset);
-}
+/* 批量选择复选框直接用 Kit 的 .nvui-checkbox（v2.6.0 起内置）：
+ * 16px 小方块、元素级宿主隔离、支持 :checked / :indeterminate / 焦点环，
+ * 这里不再重画皮肤。.wbe-chk 仅保留为业务事件委托的钩子。 */
 
 #wbe-overlay .wbe-mid {
     flex: 1 1 auto;
