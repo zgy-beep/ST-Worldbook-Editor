@@ -26,16 +26,19 @@ test('buildMessages 把 style 追加到任务 system，空白 style 不追加', 
   assert.equal(blank[0].content, 'TASK');
 });
 
-test('buildMessages 将非空自定义 jailbreak 作为单独 user 消息且顺序正确', () => {
+test('buildMessages 将非空自定义 jailbreak 放在最上部的 system 消息', () => {
   const messages = buildMessages({ system: 'SYS', user: 'USER', jailbreak: '自定义破限输入' });
 
-  assert.deepEqual(messages.map(message => message.role), ['system', 'user', 'user', 'system']);
-  assert.equal(messages[1].content, 'USER');
-  assert.equal(messages[2].content, '自定义破限输入');
+  // 框架声明必须在最前，且用 system 口吻；输出契约仍压轴
+  assert.deepEqual(messages.map(message => message.role), ['system', 'system', 'user', 'system']);
+  assert.equal(messages[0].content, '自定义破限输入', 'jailbreak 应为第一条消息');
+  assert.equal(messages[1].content, 'SYS');
+  assert.equal(messages[2].content, 'USER');
   assert.equal(messages[3].content, CONTRACT);
 
   const blank = buildMessages({ system: 'SYS', user: 'USER', jailbreak: '  \n ' });
   assert.deepEqual(blank.map(message => message.role), ['system', 'user', 'system']);
+  assert.equal(blank[0].content, 'SYS', '空白 jailbreak 不得挤掉任务 system');
 });
 
 test('buildMessages retry 在最后追加 JSON 强化 system，同时保留任务和 jailbreak', () => {
@@ -47,13 +50,13 @@ test('buildMessages retry 在最后追加 JSON 强化 system，同时保留任�
     retry: true,
   });
 
-  assert.deepEqual(messages.map(message => message.role), ['system', 'user', 'user', 'system', 'system']);
-  assert.equal(messages[2].content, 'JB');
+  assert.deepEqual(messages.map(message => message.role), ['system', 'system', 'user', 'system', 'system']);
+  assert.equal(messages[0].content, 'JB', 'jailbreak 在最上部');
+  assert.match(messages[1].content, /SYS/);
+  assert.match(messages[1].content, /STYLE/, 'style 仍追加在任务 system 上');
+  assert.equal(messages[2].content, 'USER');
   assert.equal(messages[3].content, CONTRACT);
   assert.match(messages[4].content, /JSON/);
-  assert.match(messages[0].content, /SYS/);
-  assert.match(messages[0].content, /STYLE/);
-  assert.equal(messages[1].content, 'USER');
 });
 
 test('buildMessages format=text 使用正文契约、保留 jailbreak 且不追加 JSON retry', () => {
@@ -73,12 +76,13 @@ test('buildMessages format=text 使用正文契约、保留 jailbreak 且不追�
     format: 'text',
   });
 
-  assert.deepEqual(textMessages.map(message => message.role), ['system', 'user', 'user', 'system']);
-  assert.equal(textMessages[2].content, 'JB');
+  assert.deepEqual(textMessages.map(message => message.role), ['system', 'system', 'user', 'system']);
+  assert.equal(textMessages[0].content, 'JB');
+  // 前两条 system（jailbreak + 任务）必须两种格式完全一致；契约本身按格式不同
   assert.deepEqual(
-    textMessages.filter(message => message.role === 'user').map(message => message.content),
-    jsonMessages.filter(message => message.role === 'user').map(message => message.content),
-    '两种格式必须使用同一个自定义 jailbreak',
+    textMessages.filter(message => message.role === 'system').slice(0, 2).map(message => message.content),
+    jsonMessages.filter(message => message.role === 'system').slice(0, 2).map(message => message.content),
+    '两种格式必须使用同一个自定义 jailbreak 与任务 system',
   );
 
   const contract = textMessages[textMessages.length - 1].content;

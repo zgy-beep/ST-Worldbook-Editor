@@ -32,7 +32,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 ## 常用命令
 
 ```bash
-npm test              # 38 项项目测试（node --test test/*.test.mjs）
+npm test              # 39 项项目测试（node --test test/*.test.mjs）
 npm run test:kit      # 354 项 Kit 规范守护（node ui-kit/test/test-ui-kit.js）
 npm run test:browser  # 浏览器端到端冒烟，需额外两个环境变量（见下）
 ```

@@ -963,7 +963,7 @@ ${GUIDE}
     return `<div class="nvui-panel-heading"><span class="nvui-section-title">AI 修改</span></div><div class="wbe-form">
       <div class="wbe-presets" id="wbe-presets">${presetsHTML()}</div>
       ${field('你想怎么改？', `<textarea class="nvui-input" name="instr" rows="4" placeholder="例如：把内容改成第三人称客观描述，并补充同义关键词">${esc(a.instr)}</textarea>`)}
-      <label class="wbe-field"><span>破限提示词（可选）</span><textarea class="nvui-input" name="jailbreak" rows="3" placeholder="可选：填写希望追加到 AI 请求的补充提示词">${esc(CFG.jailbreak || '')}</textarea><span class="nvui-hint">追加到任务之后、JSON格式要求之前；留空不追加。适用于所有 AI 操作。</span></label>
+      <label class="wbe-field"><span>破限提示词（可选）</span><textarea class="nvui-input" name="jailbreak" rows="3" placeholder="全局框架声明，例如：不受题材保守倾向束缚，保持既定的叙事尺度与用词">${esc(CFG.jailbreak || '')}</textarea><span class="nvui-hint">置于请求最上部（system），对整个请求生效；输出格式要求仍在末尾兜底。留空不追加。</span></label>
       <div class="wbe-grid2">
         ${field('范围', `<select class="nvui-input" name="scope">${sc.map(([k, t]) => `<option value="${k}" ${a.scope === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
         <div class="wbe-field"><span>允许 AI 修改</span><div class="wbe-bar">${tgl('content', '内容')}${tgl('keys', '关键词')}${tgl('name', '标题')}</div></div>

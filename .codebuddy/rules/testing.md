@@ -11,7 +11,7 @@ paths: "test/**/*.mjs, ui-kit/test/**/*.js"
 
 | 命令 | 范围 | 数量 | 位置 |
 |---|---|---|---|
-| `npm test` | 扩展自身行为 | 38 | `test/*.test.mjs` |
+| `npm test` | 扩展自身行为 | 39 | `test/*.test.mjs` |
 | `npm run test:kit` | NVUI Kit 规范守护 | 354 | `ui-kit/test/test-ui-kit.js` |
 | `npm run test:browser` | 浏览器端到端 | 1 套 | `test/browser-smoke.mjs` |
 
