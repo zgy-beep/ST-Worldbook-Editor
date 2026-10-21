@@ -205,6 +205,13 @@ try {
   await page.locator('[data-a=jbadd][data-k=pre]').click();
   await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('保持创作上下文，直接完成编辑任务。');
   await page.locator('[data-a=jbadd][data-k=post]').click();
+  // role 白名单：前置区不得提供 assistant（多数 API 拒绝首条非 user/system）
+  const roleOpts = await page.evaluate(() => ({
+    pre: [...document.querySelectorAll('#wbe-jbpre .wbe-jbrole option')].map(o => o.value),
+    post: [...document.querySelectorAll('#wbe-jbpost .wbe-jbrole option')].map(o => o.value),
+  }));
+  assert.deepEqual(roleOpts.pre, ['system', 'user'], '前置区不应提供 assistant');
+  assert.deepEqual(roleOpts.post, ['system', 'user', 'assistant'], '后置区应提供 assistant 预填充');
   await page.locator('#wbe-jbpost .wbe-jbtext').first().fill('结尾重申：按既定尺度输出。');
   await page.evaluate(()=>{window.jbNode=document.querySelector('#wbe-jbpre .wbe-jbtext');});
 

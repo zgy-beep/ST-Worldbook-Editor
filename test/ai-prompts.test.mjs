@@ -264,6 +264,62 @@ test('parseAIJSON 的 json 围栏写坏时仍不吞掉正文中的有效结果',
   assert.deepEqual(parseAIJSON(text), [{ ok: 1 }]);
 });
 
+test('buildMessages 把 assistant 预填充移到整条请求的最后，契约仍在它之前', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    post: [
+      { role: 'system', content: '约束' },
+      { role: 'assistant', content: '好的，以下：' },
+    ],
+  });
+
+  // 预填充是最后一条；契约作为最后一条「指令」排在它前面
+  assert.deepEqual(messages.map(m => m.role),
+    ['system', 'user', 'system', 'system', 'assistant']);
+  assert.equal(messages[2].content, '约束');
+  assert.equal(messages[3].content, CONTRACT);
+  assert.equal(messages[4].content, '好的，以下：', 'assistant 必须是最后一条');
+});
+
+test('buildMessages 只取最后一条 assistant 作预填充，其余降级为 system 且保持原位', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    post: [
+      { role: 'assistant', content: '第一条A' },
+      { role: 'system', content: '中间S' },
+      { role: 'assistant', content: '第二条A' },
+    ],
+  });
+
+  assert.deepEqual(messages.map(m => m.role),
+    ['system', 'user', 'system', 'system', 'system', 'assistant']);
+  assert.equal(messages[2].content, '第一条A', '被降级的 assistant 应留在原位且变成 system');
+  assert.equal(messages[3].content, '中间S', '中间的 system 位置不变');
+  assert.equal(messages[4].content, CONTRACT);
+  assert.equal(messages[5].content, '第二条A', '只有最后一条成为预填充');
+});
+
+test('buildMessages 前置区的 assistant 仍然被降级（前置区不支持预填充）', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    pre: [{ role: 'assistant', content: '前置里的 assistant' }],
+  });
+  assert.deepEqual(messages.map(m => m.role), ['system', 'system', 'user', 'system']);
+  assert.equal(messages[0].content, '前置里的 assistant');
+  assert.equal(messages[0].role, 'system');
+});
+
+test('buildMessages 预填充与 retry 共存时，重试提醒在预填充之前', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    post: [{ role: 'assistant', content: 'PREFILL' }],
+    retry: true,
+  });
+  assert.equal(messages[messages.length - 1].role, 'assistant');
+  assert.equal(messages[messages.length - 1].content, 'PREFILL');
+  assert.match(messages[messages.length - 2].content, /重试提醒/);
+});
+
 test('buildMessages 参数缺失时给出明确错误', () => {
   assert.throws(() => buildMessages({ user: 'U' }), /system/);
   assert.throws(() => buildMessages({ system: 'S' }), /user/);
