@@ -17,25 +17,34 @@ function textValue(value) {
 /**
  * 拼装酒馆助手 ordered_prompts 消息数组。
  *
- * 顺序固定为：自定义 jailbreak system（最上部）→ 任务 system（含 style）
- * → 任务 user → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
+ * 顺序固定为：首破限 system → 任务 system（含 style）→ 任务 user
+ * → 尾破限 system → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
  *
- * 为什么 jailbreak 放最上部而不是任务之后：
- *   它是「全局框架声明」（例如要求不受题材保守倾向束缚、保持特定叙事尺度），
- *   作用对象是整个请求，而不是某一次具体任务。
- *   - 放在任务之后时，模型会把它读成「对刚才那个任务的补充要求」，
- *     与任务指令冲突时会反过来压制任务；
- *   - 夹在任务 user 与输出契约之间，正好落在长上下文的低注意力中段；
- *   - 用 role:'user' 下达框架声明，权重天然低于 system。
- *   输出契约仍留在最后压轴（recency 效应保证格式），两者一头一尾互相兜底。
+ * 为什么是「首 + 尾」两段破限：
+ *   破限提示词是「全局框架声明」（例如要求不受题材保守倾向束缚、保持特定叙事尺度），
+ *   作用对象是整个请求，而不是某一次具体任务。长上下文里模型对**开头**与**结尾**
+ *   的注意力最强、中段最弱（lost in the middle），所以两头各锚一次：
+ *   - **首破限**设定基线。放在任务之后会被读成「对刚才那个任务的补充要求」，
+ *     与任务指令冲突时反而压制任务；用 role:'user' 下达则权重低于 system。
+ *   - **尾破限**在临近输出位置再强调一次，对抗中段衰减。
+ *   - **输出契约必须留在最后压轴**：它是格式硬约束，排在它后面的任何指令
+ *     都会削弱 JSON/正文的稳定性。因此尾破限置于契约**之前**，而不是最末。
  *
- * 不内置任何破限文案；jailbreak 为空时不会生成额外消息。
+ * 两段都为空时不生成额外消息；任一为空时只跳过那一条。
  * format='text' 时只要求正文，且不追加 JSON 重试提醒。
  *
- * @param {{system: string, user: string, style?: string, jailbreak?: string, retry?: boolean, format?: 'json'|'text'}} params
+ * @param {{system: string, user: string, style?: string, jailbreakHead?: string, jailbreakTail?: string, retry?: boolean, format?: 'json'|'text'}} params
  * @returns {Array<{role: 'system'|'user', content: string}>}
  */
-export function buildMessages({ system, user, style = '', jailbreak = '', retry = false, format = 'json' } = {}) {
+export function buildMessages({
+  system,
+  user,
+  style = '',
+  jailbreakHead = '',
+  jailbreakTail = '',
+  retry = false,
+  format = 'json',
+} = {}) {
   if (typeof system !== 'string' || !system.trim()) {
     throw new TypeError('buildMessages: system 必须是非空字符串');
   }
@@ -44,13 +53,15 @@ export function buildMessages({ system, user, style = '', jailbreak = '', retry 
   }
 
   const styleText = textValue(style);
+  const headText = typeof jailbreakHead === 'string' ? jailbreakHead.trim() : '';
+  const tailText = typeof jailbreakTail === 'string' ? jailbreakTail.trim() : '';
+
   const messages = [];
-
-  const jailbreakText = typeof jailbreak === 'string' ? jailbreak.trim() : '';
-  if (jailbreakText) messages.push({ role: 'system', content: jailbreakText });
-
+  if (headText) messages.push({ role: 'system', content: headText });
   messages.push({ role: 'system', content: styleText ? system + STYLE_LABEL + styleText : system });
   messages.push({ role: 'user', content: user });
+  // 尾破限必须在输出契约之前：契约是压轴的格式硬约束，不能被挤到后面
+  if (tailText) messages.push({ role: 'system', content: tailText });
 
   const isText = format === 'text';
   messages.push({ role: 'system', content: isText ? TEXT_OUTPUT_CONTRACT : JSON_OUTPUT_CONTRACT });

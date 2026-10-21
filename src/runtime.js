@@ -12,7 +12,7 @@
 export const EXTENSION_NAME = 'st_worldbook_editor';
 export const LEGACY_SETTINGS_KEY = 'wbe_settings_v1';
 
-/** 与原单文件脚本 CFG 兼容的默认值，另加 jailbreak 空字段。 */
+/** 与原单文件脚本 CFG 兼容的默认值；破限提示词分首（jbHead）/ 尾（jbTail）两段。 */
 export const DEFAULT_SETTINGS = Object.freeze({
   mode: 'st',
   apiurl: '',
@@ -26,7 +26,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   flt: '',
   groupFlt: '',
   tpl: '',
-  jailbreak: '',
+  // 破限提示词分首尾两段：前者设定基线，后者在临近输出处再锚一次
+  jbHead: '',
+  jbTail: '',
 });
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
@@ -198,6 +200,21 @@ function ensureLayout(settings) {
 }
 
 /**
+ * 旧版单字段 jailbreak 迁移到首破限。
+ *
+ * 该字段历史上先放在任务之后、后改置最上方；现在拆成首 / 尾两段。
+ * 旧值一律并入 jbHead（与原「置于最上方」的行为连续），迁移后删除旧键，
+ * 避免两处同时存在、后续不知道该读哪个。
+ */
+function migrateLegacyJailbreak(settings) {
+  if (!hasOwn(settings, 'jailbreak')) return false;
+  const legacy = typeof settings.jailbreak === 'string' ? settings.jailbreak : '';
+  delete settings.jailbreak;
+  if (legacy.trim() && !settings.jbHead) settings.jbHead = legacy;
+  return true;
+}
+
+/**
  * 取（并在首次使用时初始化/迁移）扩展设置对象。
  * 返回的是 extensionSettings 内的真实引用，调用方可以直接修改后 saveSettings()。
  */
@@ -219,6 +236,7 @@ export function getSettings() {
   }
 
   if (fillDefaults(settings)) changed = true;
+  if (migrateLegacyJailbreak(settings)) changed = true;
   if (ensureLayout(settings)) changed = true;
 
   if (store[EXTENSION_NAME] !== settings) {

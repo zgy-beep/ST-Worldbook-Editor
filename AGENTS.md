@@ -32,7 +32,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 ## 常用命令
 
 ```bash
-npm test              # 39 项项目测试（node --test test/*.test.mjs）
+npm test              # 40 项项目测试（node --test test/*.test.mjs）
 npm run test:kit      # 354 项 Kit 规范守护（node ui-kit/test/test-ui-kit.js）
 npm run test:browser  # 浏览器端到端冒烟，需额外两个环境变量（见下）
 ```
@@ -104,6 +104,11 @@ npm run test:browser
     `.wbe-chk` 只作事件钩子，**禁止再给它写皮肤**）；
   - 折叠条持久化 → `panel.adoptAccordions()`，状态存 `nvui_state_wbe.accordion`。
   - 对应上游 issue #9 / #10 / #11 均已 CLOSED COMPLETED。
+- **破限提示词独立成页**（`#wbe-pane-jb`，tab key `jb`）：首部 / 尾部两段，分别对应
+  `CFG.jbHead` / `CFG.jbTail`，都走 `role:'system'`。首部在最上、尾部在输出契约之前，
+  契约始终压轴。旧的单字段 `jailbreak` 在 `runtime.getSettings()` 里一次性迁入 `jbHead`
+  并删除旧键。改这块必须同步 `src/ai-prompts.js`、`test/ai-prompts.test.mjs`、
+  `test/browser-smoke.mjs` 的 prompts 顺序断言、README 与本文件。
 - **折叠条的两个坑**（都踩过）：
   1. 开合必须调 `acc.setOpen()`，不能直接 `toggleClass` —— 前者被 Kit 包装过会落盘；
   2. 任何重绘折叠条的操作（如 `renderSet()`）都必须重新 `adoptAccordions()`，

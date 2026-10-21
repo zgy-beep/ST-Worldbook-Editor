@@ -26,63 +26,89 @@ test('buildMessages 把 style 追加到任务 system，空白 style 不追加', 
   assert.equal(blank[0].content, 'TASK');
 });
 
-test('buildMessages 将非空自定义 jailbreak 放在最上部的 system 消息', () => {
-  const messages = buildMessages({ system: 'SYS', user: 'USER', jailbreak: '自定义破限输入' });
+test('buildMessages 首破限置于最上部、尾破限置于输出契约之前', () => {
+  const messages = buildMessages({
+    system: 'SYS',
+    user: 'USER',
+    jailbreakHead: '首破限',
+    jailbreakTail: '尾破限',
+  });
 
-  // 框架声明必须在最前，且用 system 口吻；输出契约仍压轴
-  assert.deepEqual(messages.map(message => message.role), ['system', 'system', 'user', 'system']);
-  assert.equal(messages[0].content, '自定义破限输入', 'jailbreak 应为第一条消息');
+  // 一头一尾各锚一次，契约仍压轴
+  assert.deepEqual(messages.map(message => message.role),
+    ['system', 'system', 'user', 'system', 'system']);
+  assert.equal(messages[0].content, '首破限', '首破限应为第一条消息');
   assert.equal(messages[1].content, 'SYS');
   assert.equal(messages[2].content, 'USER');
-  assert.equal(messages[3].content, CONTRACT);
+  assert.equal(messages[3].content, '尾破限', '尾破限应紧邻输出契约之前');
+  assert.equal(messages[4].content, CONTRACT, '输出契约必须压轴');
 
-  const blank = buildMessages({ system: 'SYS', user: 'USER', jailbreak: '  \n ' });
+  // 只给首破限
+  const headOnly = buildMessages({ system: 'SYS', user: 'USER', jailbreakHead: '只首' });
+  assert.deepEqual(headOnly.map(message => message.role), ['system', 'system', 'user', 'system']);
+  assert.equal(headOnly[0].content, '只首');
+
+  // 只给尾破限
+  const tailOnly = buildMessages({ system: 'SYS', user: 'USER', jailbreakTail: '只尾' });
+  assert.deepEqual(tailOnly.map(message => message.role), ['system', 'user', 'system', 'system']);
+  assert.equal(tailOnly[2].content, '只尾');
+  assert.equal(tailOnly[3].content, CONTRACT);
+
+  // 空白不得挤掉任务 system
+  const blank = buildMessages({ system: 'SYS', user: 'USER', jailbreakHead: '  \n ', jailbreakTail: ' \t ' });
   assert.deepEqual(blank.map(message => message.role), ['system', 'user', 'system']);
-  assert.equal(blank[0].content, 'SYS', '空白 jailbreak 不得挤掉任务 system');
+  assert.equal(blank[0].content, 'SYS');
 });
 
-test('buildMessages retry 在最后追加 JSON 强化 system，同时保留任务和 jailbreak', () => {
+test('buildMessages retry 在最后追加 JSON 强化 system，同时保留任务与两段破限', () => {
   const messages = buildMessages({
     system: 'SYS',
     user: 'USER',
     style: 'STYLE',
-    jailbreak: 'JB',
+    jailbreakHead: 'JB_HEAD',
+    jailbreakTail: 'JB_TAIL',
     retry: true,
   });
 
-  assert.deepEqual(messages.map(message => message.role), ['system', 'system', 'user', 'system', 'system']);
-  assert.equal(messages[0].content, 'JB', 'jailbreak 在最上部');
+  assert.deepEqual(messages.map(message => message.role),
+    ['system', 'system', 'user', 'system', 'system', 'system']);
+  assert.equal(messages[0].content, 'JB_HEAD', '首破限在最上部');
   assert.match(messages[1].content, /SYS/);
   assert.match(messages[1].content, /STYLE/, 'style 仍追加在任务 system 上');
   assert.equal(messages[2].content, 'USER');
-  assert.equal(messages[3].content, CONTRACT);
-  assert.match(messages[4].content, /JSON/);
+  assert.equal(messages[3].content, 'JB_TAIL', '尾破限在契约之前');
+  assert.equal(messages[4].content, CONTRACT);
+  assert.match(messages[5].content, /JSON/, '重试提醒必须最后');
 });
 
-test('buildMessages format=text 使用正文契约、保留 jailbreak 且不追加 JSON retry', () => {
+test('buildMessages format=text 使用正文契约、保留两段破限且不追加 JSON retry', () => {
   const jsonMessages = buildMessages({
     system: 'SYS',
     user: 'USER',
     style: 'STYLE',
-    jailbreak: 'JB',
+    jailbreakHead: 'JB_HEAD',
+    jailbreakTail: 'JB_TAIL',
     retry: true,
   });
   const textMessages = buildMessages({
     system: 'SYS',
     user: 'USER',
     style: 'STYLE',
-    jailbreak: 'JB',
+    jailbreakHead: 'JB_HEAD',
+    jailbreakTail: 'JB_TAIL',
     retry: true,
     format: 'text',
   });
 
-  assert.deepEqual(textMessages.map(message => message.role), ['system', 'system', 'user', 'system']);
-  assert.equal(textMessages[0].content, 'JB');
-  // 前两条 system（jailbreak + 任务）必须两种格式完全一致；契约本身按格式不同
+  assert.deepEqual(textMessages.map(message => message.role),
+    ['system', 'system', 'user', 'system', 'system']);
+  assert.equal(textMessages[0].content, 'JB_HEAD');
+  assert.equal(textMessages[3].content, 'JB_TAIL');
+  // 除最后那条契约外，其余消息两种格式必须完全一致
   assert.deepEqual(
-    textMessages.filter(message => message.role === 'system').slice(0, 2).map(message => message.content),
-    jsonMessages.filter(message => message.role === 'system').slice(0, 2).map(message => message.content),
-    '两种格式必须使用同一个自定义 jailbreak 与任务 system',
+    textMessages.slice(0, -1).map(message => message.content),
+    jsonMessages.slice(0, 4).map(message => message.content),
+    '两种格式必须共用同一套破限与任务消息',
   );
 
   const contract = textMessages[textMessages.length - 1].content;

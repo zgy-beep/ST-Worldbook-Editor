@@ -21,9 +21,19 @@ test('settings migrate legacy fields while keeping existing ST values and unknow
     {key:'old',style:'保留地名',temp:0.3,unknownLegacy:7});
   const cfg=f.runtime.getSettings();
   assert.equal(cfg.key,'current');assert.equal(cfg.style,'保留地名');assert.equal(cfg.temp,0.3);
-  assert.equal(cfg.customFuture,true);assert.equal(cfg.unknownLegacy,7);assert.equal(cfg.jailbreak,'');
+  assert.equal(cfg.customFuture,true);assert.equal(cfg.unknownLegacy,7);
+  assert.equal(cfg.jbHead,'');assert.equal(cfg.jbTail,'');
+  assert.equal(Object.prototype.hasOwnProperty.call(cfg,'jailbreak'),false,'旧 jailbreak 键应已迁移并删除');
   assert.deepEqual(f.store.other,{keep:true});assert.ok(f.saves>0);
   assert.equal(f.runtime.getSettings(),cfg);
+});
+
+test('legacy single jailbreak field migrates into jbHead and the old key is dropped',async()=>{
+  const f=await fixture({st_worldbook_editor:{key:'k',jailbreak:'旧的破限文案'}},null);
+  const cfg=f.runtime.getSettings();
+  assert.equal(cfg.jbHead,'旧的破限文案','旧 jailbreak 应并入首破限');
+  assert.equal(cfg.jbTail,'');
+  assert.equal(Object.prototype.hasOwnProperty.call(cfg,'jailbreak'),false,'迁移后应删除旧键');
 });
 
 test('layout storage isolates its keys, clones values, and supports Kit delete semantics',async()=>{
@@ -40,8 +50,8 @@ test('layout storage isolates its keys, clones values, and supports Kit delete s
 
 test('reset clears only this extension and retains the live settings reference',async()=>{
   const f=await fixture({other:{keep:true}},{key:'old'});
-  const cfg=f.runtime.getSettings();cfg.jailbreak='用户自填';cfg.layout.a={tab:'ai'};
-  const reset=f.runtime.resetSettings();assert.equal(reset,cfg);assert.equal(cfg.key,'');assert.equal(cfg.jailbreak,'');
+  const cfg=f.runtime.getSettings();cfg.jbHead='用户自填';cfg.layout.a={tab:'ai'};
+  const reset=f.runtime.resetSettings();assert.equal(reset,cfg);assert.equal(cfg.key,'');assert.equal(cfg.jbHead,'');assert.equal(cfg.jbTail,'');
   assert.deepEqual(cfg.layout,{});assert.deepEqual(f.store.other,{keep:true});
   assert.equal(f.values.get('wbe_other_plugin'),'keep');assert.equal(f.values.has('wbe_settings_v1'),false);
 });

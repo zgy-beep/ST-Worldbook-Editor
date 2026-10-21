@@ -12,12 +12,15 @@ paths: src/ai-prompts.js, src/worldbook-api.js
 - **必须保持零运行时依赖**——不 import 酒馆助手、不碰 `window`/`document`，
   否则 Node 单测跑不起来。这是它能被 `test/ai-prompts.test.mjs` 覆盖的前提。
 - 消息顺序**固定**：
-  自定义 jailbreak **system（最上部）** → 任务 system（含 style）
-  → 任务 user → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
-- **jailbreak 必须在最上部且用 `role:'system'`**：它是全局框架声明，作用对象是整个请求。
-  放到任务之后会被模型读成「对刚才那个任务的补充要求」，与任务指令冲突时反而压制任务；
-  用 `user` 口吻则权重低于 system。输出契约仍压轴（recency 保证格式），一头一尾互相兜底。
-- `jailbreak` 为空时**不追加任何消息**。不要内置破限文案。
+  首部破限 system（最上）→ 任务 system（含 style）→ 任务 user
+  → **尾部破限 system** → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
+- **破限分两段（`jailbreakHead` / `jailbreakTail`），都用 `role:'system'`**：
+  它是全局框架声明，作用对象是整个请求。首部锚基线，尾部在临近输出处再锚一次
+  （长上下文里开头/结尾注意力最强、中段最弱）。放到任务之后会被读成「补充要求」，
+  用 `user` 口吻则权重低于 system。
+- **输出契约必须压轴**：它是格式硬约束，排在它后面的任何指令都会削弱 JSON/正文稳定性。
+  所以尾破限置于契约**之前**，不是最末。
+- 任一段为空时只跳过那一条；两段都空则不追加任何消息。不要内置破限文案。
 - `format='text'` 时只要求正文，**不追加** JSON 重试提醒。
 - 输出契约有两种：结构化任务用 `JSON_OUTPUT_CONTRACT`，纯文本用 `TEXT_OUTPUT_CONTRACT`。
   两者都要求「不输出思考过程/说明/Markdown」。

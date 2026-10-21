@@ -158,6 +158,14 @@
     resize: vertical;
 }
 
+/* 破限提示词输入框：比条目正文矮得多，通常 5~10 行就够，
+   避免两段破限各占 260px 把整页撑到看不完 */
+#wbe-overlay .wbe-jb {
+    min-height: 120px;
+    line-height: var(--nvui-lh-relaxed);
+    resize: vertical;
+}
+
 #wbe-overlay .wbe-probe {
     min-height: 120px;
     line-height: var(--nvui-lh-relaxed);
