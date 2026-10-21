@@ -299,15 +299,30 @@ try {
   await page.waitForTimeout(200);
 
   // 回归：折叠条开合状态必须持久化。
-  // Kit 的 persist.accordion 只覆盖经 addAccordion/addNode 注册的折叠条；
-  // 我们的折叠条是 innerHTML 注入的纯 DOM，绕过了注册机制，需自行持久化。
-  await page.evaluate(() => {
-    const head = document.querySelector('#wbe-acc-api .nvui-acc-head');
-    if (head) head.click();
-  });
-  await page.waitForTimeout(400);
-  const accState = await page.evaluate(() => (settings.st_worldbook_editor.layout || {}).wbe_acc_state);
-  assert.equal(accState && accState['wbe-acc-api'], false, '折叠条状态应已写入 layout');
+  // v2.6.0 起由 Kit 的 panel.adoptAccordions() 接管（GitHub issue #11），
+  // 状态存在 Kit 自己的 nvui_state_wbe.accordion 里，键取折叠条的稳定 id。
+  await page.locator('#wbe-tab-set').click();
+  await page.waitForTimeout(250);
+  await page.locator('#wbe-acc-api .nvui-acc-head').click();
+  await page.waitForTimeout(700);
+  // Kit 的落盘有 250ms 防抖，等它真正写进 storage 再断言
+  const accDiag = await page.waitForFunction(() => {
+    const st = (settings.st_worldbook_editor.layout || {}).nvui_state_wbe;
+    const acc = st && st.accordion;
+    if (acc && acc['wbe-acc-api'] === false) return { ok: true, accordion: acc };
+    const setAccs = [...document.querySelectorAll('#wbe-set .nvui-acc')];
+    return {
+      ok: false,
+      accordion: acc,
+      apiOpen: document.querySelector('#wbe-acc-api')?.classList.contains('is-open'),
+      setAccSetOpen: setAccs.map(a => typeof a.setOpen),
+      setAccIds: setAccs.map(a => a.id),
+    };
+  }, null, { timeout: 5000 }).then(h => h.jsonValue()).catch(() => ({ ok: false, timeout: true }));
+  assert.ok(accDiag && accDiag.ok, `折叠条状态未写入：${JSON.stringify(accDiag)}`);
+  // 切回 AI 标签：Kit 会持久化当前标签，后续流程期望重开后停在 AI
+  await page.locator('#wbe-tab-ai').click();
+  await page.waitForTimeout(200);
 
   await mkdir(resolve(root,'.test-output'),{recursive:true});
   await page.screenshot({path:resolve(root,'.test-output/desktop.png')});

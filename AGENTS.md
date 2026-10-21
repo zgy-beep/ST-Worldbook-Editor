@@ -26,7 +26,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 - `src/index.js` 只管生命周期与菜单，**不写业务 UI**。
 - `src/runtime.js` 是**唯一**允许接触 `SillyTavern.getContext()` 的地方；其他模块通过 runtime 拿能力。
 - `src/ai-prompts.js` 必须保持零运行时依赖，否则 Node 单测跑不起来。
-- `ui-kit/` 是 **NVUI Kit v2.5.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
+- `ui-kit/` 是 **NVUI Kit v2.6.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
   不要把扩展业务逻辑写进 `ui-kit/`，也不要改它的 `nvui-api.js`。
 
 ## 常用命令
@@ -97,14 +97,20 @@ npm run test:browser
 
 ### 已落地的关键改造（2026-10-21，改动前务必先 `git status` 确认是否仍然成立）
 
+- **Kit 已升级到 v2.6.0**，此前自建的三套临时方案全部退场，改为复用上游能力：
+  - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），
+    本扩展的 `src/styles/host-isolation.css` **只剩 `.wbe-chipin` 一条**；
+  - 批量选择复选框 → 复用 `.nvui-checkbox`（HTML 写 `class="nvui-checkbox wbe-chk"`，
+    `.wbe-chk` 只作事件钩子，**禁止再给它写皮肤**）；
+  - 折叠条持久化 → `panel.adoptAccordions()`，状态存 `nvui_state_wbe.accordion`。
+  - 对应上游 issue #9 / #10 / #11 均已 CLOSED COMPLETED。
+- **折叠条的两个坑**（都踩过）：
+  1. 开合必须调 `acc.setOpen()`，不能直接 `toggleClass` —— 前者被 Kit 包装过会落盘；
+  2. 任何重绘折叠条的操作（如 `renderSet()`）都必须重新 `adoptAccordions()`，
+     否则新节点丢失注册；且 Kit 会重放 createPanel 时的旧快照，要自行记录/还原状态。
 - **目录结构**：根目录平铺 → `src/` 子目录 + `src/styles/`。`manifest.json` 的 `js` / `css`
   指向 `src/index.js` / `src/styles/style.css`（ST 按 `/scripts/extensions/<名>/<manifest 字段>`
-  加载，支持多级相对路径）。`README.md` 的「目录结构」与「release 同步命令」两节已同步。
-- **宿主样式隔离层** `src/styles/host-isolation.css`：全项目**唯一**允许 `!important` 的位置。
-  起因是第三方酒馆主题用 `input[type=text]` / `select { background-color: ... !important }`
-  重写全局表单控件，kit 的 `.nvui-input`（裸类，特异性 0,1,0）赢不过，导致浅色主题下
-  输入框变成「深底 + 深字」。隔离层用 `#wbe-overlay` 作用域夺回 Kit 令牌。
-  上游跟进：<https://github.com/zgy-beep/ui-kit/issues/9>（kit 的 §8 宿主兼容红线目前只隔离了 checkbox）。
+  加载，支持多级相对路径）。
 - **折叠条间距**：工具页根容器曾是 `.wbe-form`（flex + gap 10px），与设置页的普通块级容器
   叠加 Kit 的 `.nvui-acc` margin，导致两页间距 18px vs 8px。现统一用 `.wbe-accs`
   （普通块级），间距完全交给 Kit 的 margin 决定。

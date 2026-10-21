@@ -156,7 +156,7 @@ function probeHostHttp(url) {
     // Dimension 1: Panel Opening (!dialog.hidden && dialog.open)
     // =========================================================================
     console.log('\n--- 3. Dimension 1: Panel Opening Verification ---');
-    const d1Result = await page.evaluate(() => {
+    const d1Result = await page.evaluate(async () => {
         const id = 'challenger_d1_open';
         const panel = window.NVUI.createPanel({
             id,
@@ -184,8 +184,9 @@ function probeHostHttp(url) {
         const hasThemeToggle = !!header.querySelector('.nvui-theme-toggle');
         const hasCloseBtn = !!header.querySelector('.nvui-panel-close');
 
-        // Close
+        // Close with animation wait
         panel.close();
+        await new Promise(r => setTimeout(r, 350));
         const postCloseHidden = panel.dialog.hidden;
         const postCloseOpen = panel.dialog.open;
 
@@ -236,8 +237,8 @@ function probeHostHttp(url) {
             title: 'Persistence Test',
             persist: true,
             tabs: [
-                { id: 'tab_a', label: 'Tab A', content: '<div id="content_a">A</div>' },
-                { id: 'tab_b', label: 'Tab B', content: '<div id="content_b">B</div>' },
+                { key: 'tab_a', label: 'Tab A', content: '<div id="content_a">A</div>' },
+                { key: 'tab_b', label: 'Tab B', content: '<div id="content_b">B</div>' },
             ],
         });
 
@@ -266,8 +267,8 @@ function probeHostHttp(url) {
             title: 'Persistence Test Reopened',
             persist: true,
             tabs: [
-                { id: 'tab_a', label: 'Tab A', content: '<div id="content_a">A</div>' },
-                { id: 'tab_b', label: 'Tab B', content: '<div id="content_b">B</div>' },
+                { key: 'tab_a', label: 'Tab A', content: '<div id="content_a">A</div>' },
+                { key: 'tab_b', label: 'Tab B', content: '<div id="content_b">B</div>' },
             ],
         });
 
@@ -277,9 +278,9 @@ function probeHostHttp(url) {
         const activeTab = panel2.dialog.querySelector('.nvui-tab.is-active');
         const activeTabId = activeTab?.getAttribute('data-tab');
 
-        // Check restored size
-        const restoredWidth = panel2.dialog.style.width;
-        const restoredHeight = panel2.dialog.style.height;
+        // Check restored size from panel (not dialog wrapper)
+        const restoredWidth = panel2.panel.style.width;
+        const restoredHeight = panel2.panel.style.height;
 
         // Test clearLayoutState
         panel2.clearLayoutState();
@@ -290,9 +291,9 @@ function probeHostHttp(url) {
 
         return {
             storedRaw,
-            storedWidth: stored?.width,
-            storedHeight: stored?.height,
-            storedTab: stored?.activeTab,
+            storedWidth: stored?.size?.width,
+            storedHeight: stored?.size?.height,
+            storedTab: stored?.tab,
             activeTabId,
             restoredWidth,
             restoredHeight,
@@ -513,8 +514,8 @@ function probeHostHttp(url) {
         });
         panelDefault.open();
 
-        const defaultRect = panelDefault.dialog.getBoundingClientRect();
-        const defaultComputed = window.getComputedStyle(panelDefault.dialog);
+        const defaultRect = panelDefault.panel.getBoundingClientRect();
+        const defaultComputed = window.getComputedStyle(panelDefault.panel);
         const defaultComputedW = Math.round(parseFloat(defaultComputed.width));
         const defaultRectW = Math.round(defaultRect.width);
 
@@ -530,8 +531,8 @@ function probeHostHttp(url) {
         });
         panelCustom.open();
 
-        const customRect = panelCustom.dialog.getBoundingClientRect();
-        const customComputed = window.getComputedStyle(panelCustom.dialog);
+        const customRect = panelCustom.panel.getBoundingClientRect();
+        const customComputed = window.getComputedStyle(panelCustom.panel);
         const customComputedW = Math.round(parseFloat(customComputed.width));
         const customRectW = Math.round(customRect.width);
 
