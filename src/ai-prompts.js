@@ -10,38 +10,64 @@ const TEXT_OUTPUT_CONTRACT = '仅输出本次任务要求的正文，不输出�
 const RETRY_REMINDER = '【重试提醒】上一次输出不是有效 JSON。请严格只输出一个完整的 JSON 对象或对象数组，不要输出思考过程、解释、Markdown 代码块、注释或尾逗号，也不要在 JSON 前后添加任何文字。';
 const STYLE_LABEL = '\n\n【创作者的统一设定与文风要求】\n';
 
+/** 前置区允许的 role —— 多数 API 拒绝首条非 user/system，故不允许 assistant。 */
+const PRE_ROLES = new Set(['system', 'user']);
+/** 后置区允许的 role。assistant（预填充）暂未放开，见 README 的路线说明。 */
+const POST_ROLES = new Set(['system', 'user']);
+
 function textValue(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 /**
+ * 归一化一段消息数组：丢弃空内容、纠正非法 role、裁剪超长。
+ * 只保留有实际内容的消息，避免把空字符串塞进请求浪费 token。
+ */
+function normalizeMessages(list, allowed, label) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const content = typeof item.content === 'string' ? item.content.trim() : '';
+    if (!content) continue;
+    let role = typeof item.role === 'string' ? item.role.trim().toLowerCase() : 'system';
+    if (!allowed.has(role)) {
+      // 非法 role 一律降级为 system，而不是丢弃整条消息 —— 用户写的内容比 role 更重要
+      role = 'system';
+    }
+    out.push({ role, content });
+  }
+  return out;
+}
+
+/**
  * 拼装酒馆助手 ordered_prompts 消息数组。
  *
- * 顺序固定为：首破限 system → 任务 system（含 style）→ 任务 user
- * → 尾破限 system → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
+ * 顺序固定为：前置消息（按用户顺序）→ 任务 system（含 style）→ 任务 user
+ * → 后置消息（按用户顺序）→ 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
  *
- * 为什么是「首 + 尾」两段破限：
- *   破限提示词是「全局框架声明」（例如要求不受题材保守倾向束缚、保持特定叙事尺度），
- *   作用对象是整个请求，而不是某一次具体任务。长上下文里模型对**开头**与**结尾**
- *   的注意力最强、中段最弱（lost in the middle），所以两头各锚一次：
- *   - **首破限**设定基线。放在任务之后会被读成「对刚才那个任务的补充要求」，
+ * 为什么拆成「前置 / 后置」两个可编排的消息列表：
+ *   单条文本只能产出一个 system 块，而社区里真正有效的破限结构都是多消息的
+ *   （框架声明 + 免责铺垫 + 三方确认等）。同时长上下文里模型对**开头**与**结尾**
+ *   的注意力最强、中段最弱（lost in the middle），所以两侧各留一个可编排区：
+ *   - **前置区**设定基线。放在任务之后会被读成「对刚才那个任务的补充要求」，
  *     与任务指令冲突时反而压制任务；用 role:'user' 下达则权重低于 system。
- *   - **尾破限**在临近输出位置再强调一次，对抗中段衰减。
+ *   - **后置区**在临近输出位置再锚一次，对抗中段衰减。
  *   - **输出契约必须留在最后压轴**：它是格式硬约束，排在它后面的任何指令
- *     都会削弱 JSON/正文的稳定性。因此尾破限置于契约**之前**，而不是最末。
+ *     都会削弱 JSON / 正文的稳定性。因此后置区永远位于契约**之前**，不能越过它。
  *
- * 两段都为空时不生成额外消息；任一为空时只跳过那一条。
- * format='text' 时只要求正文，且不追加 JSON 重试提醒。
+ * role 白名单按区域区分（见 PRE_ROLES / POST_ROLES）：assistant 预填充暂时只在
+ * text 格式下有意义，本版先不放开，避免污染 JSON 解析路径。
  *
- * @param {{system: string, user: string, style?: string, jailbreakHead?: string, jailbreakTail?: string, retry?: boolean, format?: 'json'|'text'}} params
- * @returns {Array<{role: 'system'|'user', content: string}>}
+ * @param {{system: string, user: string, style?: string, pre?: Array<{role:string,content:string}>, post?: Array<{role:string,content:string}>, retry?: boolean, format?: 'json'|'text'}} params
+ * @returns {Array<{role: 'system'|'user'|'assistant', content: string}>}
  */
 export function buildMessages({
   system,
   user,
   style = '',
-  jailbreakHead = '',
-  jailbreakTail = '',
+  pre = [],
+  post = [],
   retry = false,
   format = 'json',
 } = {}) {
@@ -53,15 +79,13 @@ export function buildMessages({
   }
 
   const styleText = textValue(style);
-  const headText = typeof jailbreakHead === 'string' ? jailbreakHead.trim() : '';
-  const tailText = typeof jailbreakTail === 'string' ? jailbreakTail.trim() : '';
-
   const messages = [];
-  if (headText) messages.push({ role: 'system', content: headText });
+
+  messages.push(...normalizeMessages(pre, PRE_ROLES, '前置区'));
   messages.push({ role: 'system', content: styleText ? system + STYLE_LABEL + styleText : system });
   messages.push({ role: 'user', content: user });
-  // 尾破限必须在输出契约之前：契约是压轴的格式硬约束，不能被挤到后面
-  if (tailText) messages.push({ role: 'system', content: tailText });
+  // 后置区必须在输出契约之前：契约是压轴的格式硬约束，不能被挤到后面
+  messages.push(...normalizeMessages(post, POST_ROLES, '后置区'));
 
   const isText = format === 'text';
   messages.push({ role: 'system', content: isText ? TEXT_OUTPUT_CONTRACT : JSON_OUTPUT_CONTRACT });
@@ -69,7 +93,6 @@ export function buildMessages({
 
   return messages;
 }
-
 const THINKING_TAGS = ['thinking', 'think', 'reasoning', 'thought', 'analysis'];
 
 // 同时匹配 ```json 与 ~~~json；只在这里提取“标记为 json”的围栏，普通围栏

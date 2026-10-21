@@ -166,6 +166,37 @@
     resize: vertical;
 }
 
+/* 破限消息卡片：role 下拉 + 排序 / 删除按钮 + 文本域 */
+#wbe-overlay .wbe-jbmsg {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nvui-space-15);
+    padding: var(--nvui-space-2);
+    border: 1px solid var(--nvui-line);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-bg-2);
+}
+
+#wbe-overlay .wbe-jbmsg-head {
+    display: flex;
+    align-items: center;
+    gap: var(--nvui-space-1);
+}
+
+/* role 下拉不需要占满整行，给按钮留位置 */
+#wbe-overlay .wbe-jbrole {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 96px;
+    font-size: var(--nvui-fs-sm);
+}
+
+#wbe-overlay .wbe-jbtext {
+    min-height: 76px;
+    line-height: var(--nvui-lh-relaxed);
+    resize: vertical;
+}
+
 #wbe-overlay .wbe-probe {
     min-height: 120px;
     line-height: var(--nvui-lh-relaxed);

@@ -26,9 +26,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   flt: '',
   groupFlt: '',
   tpl: '',
-  // 破限提示词分首尾两段：前者设定基线，后者在临近输出处再锚一次
-  jbHead: '',
-  jbTail: '',
+  // 破限消息编排：前置区在任务之前，后置区在输出契约之前
+  jbPre: [],
+  jbPost: [],
 });
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
@@ -50,7 +50,9 @@ function isObject(value) {
 }
 
 function cloneValue(value) {
-  if (Array.isArray(value)) return value.slice();
+  // 数组要深一层：DEFAULT_SETTINGS 是冻结的，浅拷贝会让元素共享冻结引用，
+  // 后续修改 settings.jbPre[i].content 会静默失败。
+  if (Array.isArray(value)) return value.map(item => (isObject(item) ? { ...item } : item));
   if (isObject(value)) return { ...value };
   return value;
 }
@@ -200,18 +202,35 @@ function ensureLayout(settings) {
 }
 
 /**
- * 旧版单字段 jailbreak 迁移到首破限。
+ * 破限字段的迁移链：jailbreak（最老，单条）→ jbHead / jbTail（上一版，首尾两段）
+ * → jbPre / jbPost（本版，可编排的消息数组）。
  *
- * 该字段历史上先放在任务之后、后改置最上方；现在拆成首 / 尾两段。
- * 旧值一律并入 jbHead（与原「置于最上方」的行为连续），迁移后删除旧键，
- * 避免两处同时存在、后续不知道该读哪个。
+ * 每一代都只在新数组为空时补位，避免覆盖用户已经在新版里编辑过的内容；
+ * 迁移完成后删除所有旧键，防止多份数据并存、后续不知道该读哪个。
  */
-function migrateLegacyJailbreak(settings) {
-  if (!hasOwn(settings, 'jailbreak')) return false;
-  const legacy = typeof settings.jailbreak === 'string' ? settings.jailbreak : '';
-  delete settings.jailbreak;
-  if (legacy.trim() && !settings.jbHead) settings.jbHead = legacy;
-  return true;
+function migrateJailbreakMessages(settings) {
+  const readText = key => (typeof settings[key] === 'string' ? settings[key].trim() : '');
+  const oldest = readText('jailbreak');
+  const legacyHead = readText('jbHead');
+  const legacyTail = readText('jbTail');
+
+  let changed = false;
+  const preEmpty = !Array.isArray(settings.jbPre) || settings.jbPre.length === 0;
+  const postEmpty = !Array.isArray(settings.jbPost) || settings.jbPost.length === 0;
+
+  if (preEmpty) {
+    const head = legacyHead || oldest;
+    if (head) { settings.jbPre = [{ role: 'system', content: head }]; changed = true; }
+  }
+  if (postEmpty && legacyTail) {
+    settings.jbPost = [{ role: 'system', content: legacyTail }];
+    changed = true;
+  }
+
+  for (const key of ['jailbreak', 'jbHead', 'jbTail']) {
+    if (hasOwn(settings, key)) { delete settings[key]; changed = true; }
+  }
+  return changed;
 }
 
 /**
@@ -236,7 +255,7 @@ export function getSettings() {
   }
 
   if (fillDefaults(settings)) changed = true;
-  if (migrateLegacyJailbreak(settings)) changed = true;
+  if (migrateJailbreakMessages(settings)) changed = true;
   if (ensureLayout(settings)) changed = true;
 
   if (store[EXTENSION_NAME] !== settings) {

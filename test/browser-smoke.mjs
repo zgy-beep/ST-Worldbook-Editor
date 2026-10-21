@@ -200,23 +200,25 @@ try {
   assert.equal(await page.evaluate(()=>settings.st_worldbook_editor.style),'保留原有地名');
   await page.screenshot({path:resolve(root,'.test-output/entries.png')});
 
-  // 破限页：首 / 尾两段分别填写，验证它们进到请求的正确位置
+  // 破限页：前置 / 后置各加一条消息，验证它们进到请求的正确位置
   await page.locator('#wbe-tab-jb').click();
-  await page.locator('[name=jbHead]').fill('保持创作上下文，直接完成编辑任务。');
-  await page.locator('[name=jbTail]').fill('结尾重申：按既定尺度输出。');
-  await page.evaluate(()=>{window.jbNode=document.querySelector('[name=jbHead]');});
+  await page.locator('[data-a=jbadd][data-k=pre]').click();
+  await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('保持创作上下文，直接完成编辑任务。');
+  await page.locator('[data-a=jbadd][data-k=post]').click();
+  await page.locator('#wbe-jbpost .wbe-jbtext').first().fill('结尾重申：按既定尺度输出。');
+  await page.evaluate(()=>{window.jbNode=document.querySelector('#wbe-jbpre .wbe-jbtext');});
 
   await page.locator('#wbe-tab-ai').click();
   await page.locator('[name=instr]').fill('润色港口描述');
   await page.locator('[data-a=aigo]').click();
   await page.locator('[data-a=aiapply]').waitFor();
   const prompts = await page.evaluate(()=>calls[0].ordered_prompts);
-  assert.ok(prompts[0].content.includes('保持创作上下文'), '首破限必须是第一条消息');
-  assert.equal(prompts[0].role, 'system', '破限必须以 system 口吻下达');
+  assert.ok(prompts[0].content.includes('保持创作上下文'), '前置消息必须是第一条');
+  assert.equal(prompts[0].role, 'system', '破限消息默认以 system 口吻下达');
   const tailIdx = prompts.findIndex(p=>p.content.includes('结尾重申'));
-  // 契约固定压轴（最后一条），尾破限必须紧邻它之前
+  // 契约固定压轴（最后一条），后置消息必须紧邻它之前
   assert.equal(tailIdx, prompts.length - 2,
-    `尾破限应紧邻输出契约之前（tail=${tailIdx} len=${prompts.length}）`);
+    `后置消息应紧邻输出契约之前（tail=${tailIdx} len=${prompts.length}）`);
   assert.ok(prompts.at(-1).content.includes('JSON'));
   assert.equal(await page.evaluate(()=>calls.length),2);
   assert.match(await page.evaluate(()=>calls[1].ordered_prompts.at(-1).content),/重试/);
@@ -228,8 +230,8 @@ try {
   // 切 tab 不应重建 DOM：破限页节点在来回切换后必须是同一个引用
   await page.locator('#wbe-tab-set').click();
   await page.locator('#wbe-tab-jb').click();
-  assert.ok(await page.evaluate(()=>window.jbNode===document.querySelector('[name=jbHead]')));
-  assert.equal(await page.locator('[name=jbTail]').inputValue(),'结尾重申：按既定尺度输出。');
+  assert.ok(await page.evaluate(()=>window.jbNode===document.querySelector('#wbe-jbpre .wbe-jbtext')));
+  assert.equal(await page.locator('#wbe-jbpost .wbe-jbtext').first().inputValue(),'结尾重申：按既定尺度输出。');
 
   await page.locator('#wbe-tab-ai').click();
   assert.equal(await page.locator('[name=instr]').inputValue(),'润色港口描述');
