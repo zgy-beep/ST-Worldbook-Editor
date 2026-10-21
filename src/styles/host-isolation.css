@@ -61,3 +61,50 @@
     background: var(--nvui-bg-2) !important;
     color: var(--nvui-text) !important;
 }
+
+/* ---------- 关键词输入框：.wbe-chipin 是业务自有的 input，不是 .nvui-input ----------
+ *
+ * 它的语义是「透明地嵌在 .wbe-chips 容器里」（底色由容器提供），
+ * 但宿主规则的 `input:not([type])` 会命中它 —— 我们的 .wbe-chipin 没有 type 属性，
+ * 于是拿到宿主深色背景，浅色主题下变成一块突兀的深色长条。
+ * 这里显式还原为透明，底色交回 .wbe-chips。
+ */
+
+#wbe-overlay .wbe-chipin {
+    background: transparent !important;
+    border: none !important;
+    border-radius: var(--nvui-radius-sm) !important;
+    color: var(--nvui-text) !important;
+    margin: 0 !important;
+}
+
+/* ---------- 批量选择复选框 ----------
+ *
+ * 酒馆本体给每个 input[type=checkbox] 挂了 appearance:none + display:grid
+ * 与一个 ::before 对勾（clip-path + inset box-shadow），第三方主题还会再加
+ * background-color + box-shadow。不隔离的话，浅色主题下会出现深色方块，
+ * 且宿主的 ::before 对勾会与我们的 ::after 对勾重叠。
+ * 做法与 kit 的 .nvui-switch-row checkbox 隔离一致（kit §8 宿主兼容红线第 2 条）。
+ */
+
+#wbe-overlay .wbe-chk {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    display: inline-block !important;
+    background: var(--nvui-input-bg) !important;
+    border: 1px solid var(--nvui-line-2) !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+}
+
+#wbe-overlay .wbe-chk:checked {
+    background: var(--nvui-accent) !important;
+    border-color: var(--nvui-accent) !important;
+}
+
+#wbe-overlay .wbe-chk::before,
+#wbe-overlay .wbe-chk:checked::before,
+#wbe-overlay .wbe-chk:focus-visible::before {
+    content: none !important;
+    display: none !important;
+}

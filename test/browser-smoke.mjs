@@ -92,6 +92,25 @@ const fixture = `<!doctype html><html><head><meta charset="utf-8">
 html { transform: translateZ(0); } body { margin:0; font-family: sans-serif; }
 #sheld { position:absolute; inset:0; z-index:30; background:#30343b; }
 #extensionsMenu { position:relative; z-index:31; } button { font:inherit; }
+/* 模拟宿主第三方酒馆主题对全局表单控件的 !important 覆盖
+   （真实环境见 ST-Styles 等主题：元素选择器 + !important + 宿主主题色）。
+   没有这段，浅色主题下的配色断言就恒成立、失去区分力。 */
+input[type="text"], input[type="number"], input:not([type]),
+textarea:not([type="search"]) {
+  background-color: #2e2e34 !important;
+  border: 1px solid #4a4a52 !important;
+}
+select {
+  background-color: #2e2e34 !important;
+  border: 1px solid #4a4a52 !important;
+  margin: 4px 0 !important;
+}
+select option { background-color: #2e2e34 !important; }
+input[type="checkbox"] {
+  appearance: none; display: grid;
+  background-color: #13131a;
+  box-shadow: 0 0 0 1px #9ca3af;
+}
 </style></head><body><div id="sheld"></div>
 <div id="extensionsMenu"><button id="extensionsMenuButton">扩展菜单</button></div>
 <script src="/jquery.js"></script><script>
@@ -261,6 +280,35 @@ try {
   await page.evaluate(() => window.__sivRestore());
   await page.locator('#wbe-tab-ai').click();
 
+  // 回归：浅色主题下，关键词输入框必须透明嵌在 chips 容器里。
+  // 宿主的 `input:not([type])` 会命中 .wbe-chipin（它没有 type 属性），
+  // 未隔离时浅色主题下会变成一块突兀的深色长条。
+  await page.locator('#wbe-tab-entries').click();
+  await page.waitForTimeout(200);
+  await page.locator('.nvui-theme-toggle').click();
+  await page.waitForTimeout(300);
+  const chipInBg = await page.evaluate(() => getComputedStyle(document.querySelector('.wbe-chipin')).backgroundColor);
+  assert.match(chipInBg, /rgba\(0, 0, 0, 0\)/, `关键词输入框应透明，实际 ${chipInBg}`);
+  const chkBg = await page.evaluate(() => getComputedStyle(document.querySelector('.wbe-chk')).backgroundColor);
+  // 浅色主题下 --nvui-input-bg = rgba(255,255,255,0.9)；宿主默认是 #13131a 深色
+  assert.match(chkBg, /rgba\(255, 255, 255, 0\.9\)/, `批量选择复选框应跟随 Kit 令牌，实际 ${chkBg}`);
+  await page.locator('.nvui-theme-toggle').click();
+  await page.waitForTimeout(250);
+  // 切回 AI 标签：Kit 会持久化当前标签，后续流程期望重开后停在 AI
+  await page.locator('#wbe-tab-ai').click();
+  await page.waitForTimeout(200);
+
+  // 回归：折叠条开合状态必须持久化。
+  // Kit 的 persist.accordion 只覆盖经 addAccordion/addNode 注册的折叠条；
+  // 我们的折叠条是 innerHTML 注入的纯 DOM，绕过了注册机制，需自行持久化。
+  await page.evaluate(() => {
+    const head = document.querySelector('#wbe-acc-api .nvui-acc-head');
+    if (head) head.click();
+  });
+  await page.waitForTimeout(400);
+  const accState = await page.evaluate(() => (settings.st_worldbook_editor.layout || {}).wbe_acc_state);
+  assert.equal(accState && accState['wbe-acc-api'], false, '折叠条状态应已写入 layout');
+
   await mkdir(resolve(root,'.test-output'),{recursive:true});
   await page.screenshot({path:resolve(root,'.test-output/desktop.png')});
   // Kit persists layout with a 250ms debounce; wait for its observable storage write.
@@ -322,6 +370,18 @@ try {
   await page.locator('#wbe-menu').waitFor();
   assert.equal(await page.locator('#wbe-menu').count(),1);
   assert.equal(await page.evaluate(()=>localStorage.getItem('wbe_other_plugin')),'preserve');
+
+  // 重建面板后，折叠条开合状态应从扩展设置里恢复。
+  await page.locator('#wbe-menu').click();
+  await page.waitForFunction(()=>{
+    const o=document.querySelector('#wbe-overlay');return o && !o.hidden;
+  });
+  await page.waitForTimeout(300);
+  const accRestored = await page.evaluate(() => {
+    const acc = document.querySelector('#wbe-acc-api');
+    return acc ? acc.classList.contains('is-open') : null;
+  });
+  assert.equal(accRestored, false, '重建面板后折叠条应保持折叠状态');
   assert.deepEqual(errors,[]);
   console.log('Browser smoke passed: standard entry, migration, helper bridge, AI prompts/parse/apply, tabs, desktop/mobile, host modal, layout, lifecycle.');
 } finally {
