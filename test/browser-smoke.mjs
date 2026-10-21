@@ -111,7 +111,13 @@ window.SillyTavern = { getContext: () => ({
 }) };
 window.entries = [{uid:1,name:'港口',content:'潮汐港是一座繁忙的港口。',enabled:true,
   strategy:{type:'selective',keys:['潮汐港'],keys_secondary:{logic:'and_any',keys:[]}},
-  position:{type:'after_character_definition',depth:0,order:100},probability:100,group:''}];
+  position:{type:'after_character_definition',depth:0,order:100},probability:100,group:''},
+  // 填充条目：把列表撑高，使 .nvui-panel-body 可滚动，才能验证滚动行为。
+  // uid 从 100 起，避开 createWorldbookEntries 使用的 10+i 段位。
+  ...Array.from({length:20},(_,i)=>({uid:100+i,name:'填充条目 '+(i+1),
+    content:'第 '+(i+1)+' 条填充内容。'.repeat(4),enabled:true,
+    strategy:{type:'selective',keys:['填充'+(i+1)],keys_secondary:{logic:'and_any',keys:[]}},
+    position:{type:'after_character_definition',depth:0,order:100},probability:100,group:''}))];
 window.TavernHelper = {
   getWorldbookNames: () => ['验收世界书'], getWorldbook: async()=>structuredClone(entries),
   updateWorldbookWith: async(book, fn) => { entries=await fn(structuredClone(entries));return entries; },
@@ -234,6 +240,27 @@ try {
   await page.evaluate(()=>{document.querySelector('#host-modal').close();document.querySelector('#host-modal').remove();});
   await page.waitForFunction(()=>!document.querySelector('#wbe-layer').classList.contains('is-host-modal'));
 
+  // 回归：选择条目不得引起滚动跳动。
+  // 列表与编辑区共享 Kit 的唯一滚动层 .nvui-panel-body，一旦该层被 scrollIntoView
+  // 拉走，左侧列表会跟着一起跳走（实测 Δ -768px），用户刚点的那一行直接被滚出视野。
+  await page.locator('#wbe-tab-entries').click();
+  await page.evaluate(() => {
+    window.__sivCalls = 0;
+    const orig = Element.prototype.scrollIntoView;
+    window.__sivRestore = () => { Element.prototype.scrollIntoView = orig; };
+    Element.prototype.scrollIntoView = function (...args) { window.__sivCalls++; return orig.apply(this, args); };
+  });
+  await page.evaluate(() => { document.querySelector('.nvui-panel-body').scrollTop = 150; });
+  await page.waitForTimeout(200);
+  const scrollBefore = await page.evaluate(() => document.querySelector('.nvui-panel-body').scrollTop);
+  await page.locator('.wbe-row').nth(5).click();
+  await page.waitForTimeout(300);
+  const scrollAfter = await page.evaluate(() => document.querySelector('.nvui-panel-body').scrollTop);
+  assert.equal(await page.evaluate(() => window.__sivCalls), 0, '选择条目不应调用 scrollIntoView');
+  assert.equal(scrollAfter, scrollBefore, `选择条目不应引起滚动跳动 (${scrollBefore} -> ${scrollAfter})`);
+  await page.evaluate(() => window.__sivRestore());
+  await page.locator('#wbe-tab-ai').click();
+
   await mkdir(resolve(root,'.test-output'),{recursive:true});
   await page.screenshot({path:resolve(root,'.test-output/desktop.png')});
   // Kit persists layout with a 250ms debounce; wait for its observable storage write.
@@ -251,6 +278,36 @@ try {
   assert.ok(mobile.x>=0 && mobile.x+mobile.width<=391);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await page.screenshot({path:resolve(root,'.test-output/mobile.png')});
+
+  // 回归：移动端单栏下，选中条目后编辑区标题栏必须进入可视区（revealEditTop 生效）。
+  await page.locator('.nvui-bottom-nav-item[data-key="entries"]').click();
+  await page.waitForTimeout(250);
+  const backBtn = page.locator('.wbe-back');
+  if (await backBtn.isVisible().catch(() => false)) {
+    await backBtn.click();
+    await page.waitForTimeout(300);
+  }
+  await page.evaluate(() => {
+    if (getComputedStyle(document.querySelector('#wbe-list')).display === 'none') {
+      document.querySelector('#wbe-md').classList.remove('show-edit');
+    }
+  });
+  await page.waitForTimeout(250);
+  await page.locator('.wbe-row').nth(5).click();
+  await page.waitForTimeout(350);
+  const mobileBar = await page.evaluate(() => {
+    const pb = document.querySelector('.nvui-panel-body');
+    const bar = document.querySelector('#wbe-ebar');
+    const b = bar.getBoundingClientRect(), p = pb.getBoundingClientRect();
+    return {
+      listHidden: getComputedStyle(document.querySelector('#wbe-list')).display === 'none',
+      visible: b.top >= p.top - 1 && b.bottom <= p.bottom + 1,
+      barTop: Math.round(b.top), panelTop: Math.round(p.top),
+    };
+  });
+  assert.ok(mobileBar.listHidden, '移动端选中条目后应切换到单栏编辑视图');
+  assert.ok(mobileBar.visible,
+    `移动端选中后编辑区标题栏应可见 (barTop=${mobileBar.barTop} panelTop=${mobileBar.panelTop})`);
 
   // Disabling and activating must clean up and recreate exactly one menu/panel.
   await page.evaluate(async()=>{
