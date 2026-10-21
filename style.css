@@ -1,0 +1,497 @@
+/**
+ * 世界书编辑器 v0.6.0 · 业务样式
+ * ------------------------------------------------------------------
+ * 设计基底：本地 SillyTavern NVUI Kit v2.5.0。
+ * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
+ *
+ * 约束（全文件）：
+ *   1. 只写 Kit 没有提供的业务表面；不重画 nvui- 组件皮肤；
+ *   2. 所有取值走 --nvui-* 令牌，禁止颜色字面量 / emoji / 强制覆盖标记；
+ *   3. 选择器全部以 #wbe-overlay 作用域开头，不污染酒馆宿主；
+ *   4. 唯一滚动层是 Kit 的 .nvui-panel-body；业务子块不再设置 overflow。
+ */
+
+@import url('./ui-kit/tokens.css');
+@import url('./ui-kit/components.css');
+
+/* ==========================================================================
+ * 1. 页与双栏条目
+ * ========================================================================== */
+
+#wbe-overlay .wbe-page {
+    max-width: 920px;
+    margin: 0 auto;
+}
+
+#wbe-overlay .wbe-md {
+    display: grid;
+    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--nvui-space-3);
+}
+
+#wbe-overlay .wbe-list,
+#wbe-overlay .wbe-edit {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-items {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nvui-space-15);
+    padding: var(--nvui-space-15) var(--nvui-space-1);
+}
+
+/* ==========================================================================
+ * 2. 工具栏、标签与表单布局
+ * ========================================================================== */
+
+#wbe-overlay .wbe-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nvui-space-25);
+}
+
+#wbe-overlay .wbe-field {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    gap: var(--nvui-space-1);
+    color: var(--nvui-text-2);
+    font-size: var(--nvui-fs-md);
+}
+
+#wbe-overlay .wbe-field > .nvui-input {
+    width: 100%;
+    max-width: 100%;
+}
+
+#wbe-overlay .wbe-lbl {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-mini {
+    display: flex;
+    flex: 1 1 120px;
+    flex-direction: column;
+    min-width: 0;
+    gap: var(--nvui-space-05);
+    color: var(--nvui-text-2);
+    font-size: var(--nvui-fs-xs);
+}
+
+#wbe-overlay .wbe-mini-grow {
+    flex: 1 1 160px;
+}
+
+#wbe-overlay .wbe-list > .wbe-mini {
+    flex: 0 0 auto;
+}
+
+#wbe-overlay .wbe-mini > .nvui-input {
+    width: 100%;
+    min-width: 0;
+}
+
+#wbe-overlay .wbe-grid2 {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-grid2.is-auto {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+}
+
+#wbe-overlay .wbe-grid4 {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr));
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-swbare {
+    border-bottom: none;
+}
+
+#wbe-overlay .wbe-rowsw {
+    flex: 0 0 auto;
+    margin-left: var(--nvui-space-1);
+    padding: 0;
+    border-bottom: none;
+}
+
+#wbe-overlay .wbe-big {
+    min-height: 260px;
+    line-height: var(--nvui-lh-relaxed);
+    resize: vertical;
+}
+
+#wbe-overlay .wbe-probe {
+    min-height: 120px;
+    line-height: var(--nvui-lh-relaxed);
+    resize: vertical;
+}
+
+#wbe-overlay .wbe-grow-hint {
+    flex: 1 1 260px;
+}
+
+/* 纯布局工具类；不改变 Kit 组件的颜色/圆角/动效 */
+#wbe-overlay .wbe-mt-1 {
+    margin-top: var(--nvui-space-1);
+}
+
+#wbe-overlay .wbe-mt-2 {
+    margin-top: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-mb-1 {
+    margin-bottom: var(--nvui-space-1);
+}
+
+#wbe-overlay .wbe-my-1 {
+    margin: var(--nvui-space-1) 0;
+}
+
+/* ==========================================================================
+ * 3. 条目列表（业务自有表面）
+ * ========================================================================== */
+
+#wbe-overlay .wbe-batch {
+    display: none;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--nvui-space-15);
+    padding: var(--nvui-space-15) var(--nvui-space-2);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-accent-bg);
+    font-size: var(--nvui-fs-sm);
+}
+
+#wbe-overlay .wbe-list.has-sel .wbe-batch {
+    display: flex;
+}
+
+#wbe-overlay .wbe-row {
+    display: flex;
+    align-items: center;
+    gap: var(--nvui-space-2);
+    padding: var(--nvui-space-2) var(--nvui-space-25);
+    border-left: var(--nvui-space-05) solid var(--nvui-text-3);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-block-bg);
+    cursor: pointer;
+    transition: background-color var(--nvui-transition), border-color var(--nvui-transition);
+}
+
+#wbe-overlay .wbe-row:hover {
+    background: var(--nvui-block-bg-2);
+}
+
+#wbe-overlay .wbe-row.on {
+    background: var(--nvui-accent-bg);
+}
+
+#wbe-overlay .wbe-row.off .wbe-mid {
+    opacity: 0.45;
+}
+
+#wbe-overlay .wbe-row.dragging {
+    opacity: 0.45;
+}
+
+#wbe-overlay .wbe-row.drop-before {
+    box-shadow: inset 0 var(--nvui-space-05) 0 var(--nvui-accent);
+}
+
+#wbe-overlay .wbe-row.drop-after {
+    box-shadow: inset 0 calc(var(--nvui-space-05) * -1) 0 var(--nvui-accent);
+}
+
+/* 类型色只映射 Kit 语义令牌，不新增业务颜色变量 */
+#wbe-overlay .wbe-row.is-constant {
+    border-left-color: var(--nvui-info);
+}
+
+#wbe-overlay .wbe-row.is-selective {
+    border-left-color: var(--nvui-ok);
+}
+
+#wbe-overlay .wbe-row.is-vectorized {
+    border-left-color: var(--nvui-accent);
+}
+
+#wbe-overlay .wbe-grip {
+    flex: none;
+    color: var(--nvui-text-3);
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#wbe-overlay .wbe-grip:hover {
+    color: var(--nvui-text);
+}
+
+#wbe-overlay .wbe-mid {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+#wbe-overlay .wbe-nm {
+    overflow: hidden;
+    font-size: var(--nvui-fs-md);
+    font-weight: var(--nvui-fw-semibold);
+    line-height: var(--nvui-lh-normal);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#wbe-overlay .wbe-sub {
+    margin-top: var(--nvui-space-05);
+    overflow: hidden;
+    color: var(--nvui-text-3);
+    font-size: var(--nvui-fs-sm);
+    line-height: var(--nvui-lh-normal);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#wbe-overlay .wbe-meta {
+    flex: none;
+    color: var(--nvui-text-3);
+    font-size: var(--nvui-fs-xs);
+    white-space: nowrap;
+}
+
+#wbe-overlay .wbe-more {
+    width: 100%;
+    margin: var(--nvui-space-1) 0;
+}
+
+#wbe-overlay #wbe-hint:empty {
+    display: none;
+}
+
+/* ==========================================================================
+ * 4. 关键词 chips（业务自有输入表面）
+ * ========================================================================== */
+
+#wbe-overlay .wbe-chips {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: var(--nvui-space-1);
+    padding: var(--nvui-space-15);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-input-bg);
+    cursor: text;
+}
+
+#wbe-overlay .wbe-chips:focus-within {
+    outline: var(--nvui-focus-ring-w) solid var(--nvui-focus-ring-color);
+    outline-offset: var(--nvui-focus-ring-offset);
+}
+
+#wbe-overlay .wbe-chipin {
+    flex: 1 1 auto;
+    min-width: 90px;
+    padding: var(--nvui-space-05) var(--nvui-space-1);
+    border: none;
+    background: none;
+    color: var(--nvui-text);
+    font: inherit;
+    outline: none;
+}
+
+#wbe-overlay .wbe-chipx {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 var(--nvui-space-05);
+    border: none;
+    background: none;
+    color: inherit;
+    font-size: var(--nvui-fs-xs);
+    cursor: pointer;
+    opacity: 0.6;
+}
+
+#wbe-overlay .wbe-chipx:hover {
+    opacity: 1;
+}
+
+/* ==========================================================================
+ * 5. AI 结果、预设与差异（业务卡片，不改 nvui- 组件皮肤）
+ * ========================================================================== */
+
+#wbe-overlay .wbe-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--nvui-space-15);
+}
+
+#wbe-overlay .wbe-upr {
+    display: inline-flex;
+    gap: var(--nvui-space-1);
+}
+
+#wbe-overlay .wbe-card {
+    margin-bottom: var(--nvui-space-2);
+    padding: var(--nvui-space-2) var(--nvui-space-3);
+    border-radius: var(--nvui-radius);
+    background: var(--nvui-block-bg);
+}
+
+#wbe-overlay .wbe-card-danger {
+    border-left: var(--nvui-space-05) solid var(--nvui-danger);
+}
+
+#wbe-overlay .wbe-card-accent {
+    border-left: var(--nvui-space-05) solid var(--nvui-accent);
+}
+
+#wbe-overlay .wbe-ahd {
+    display: flex;
+    align-items: center;
+    gap: var(--nvui-space-2);
+    cursor: pointer;
+}
+
+#wbe-overlay .wbe-ln {
+    padding: var(--nvui-space-05) 0;
+    font-size: var(--nvui-fs-md);
+}
+
+#wbe-overlay .wbe-fix {
+    color: var(--nvui-ok);
+    font-size: var(--nvui-fs-sm);
+}
+
+/* 差异块不再自建滚动层：内容随唯一的 panel-body 滚动 */
+#wbe-overlay .wbe-diff {
+    margin-top: var(--nvui-space-1);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-input-bg);
+    font-size: var(--nvui-fs-sm);
+}
+
+#wbe-overlay .wbe-diff .wbe-same,
+#wbe-overlay .wbe-diff .wbe-add,
+#wbe-overlay .wbe-diff .wbe-del {
+    min-height: 1.4em;
+    padding: var(--nvui-space-05) var(--nvui-space-2);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#wbe-overlay .wbe-add {
+    background: var(--nvui-ok-bg);
+}
+
+#wbe-overlay .wbe-del {
+    background: var(--nvui-danger-bg);
+}
+
+#wbe-overlay .wbe-same {
+    color: var(--nvui-text-3);
+}
+
+#wbe-overlay .wbe-hrow {
+    margin: var(--nvui-space-1) 0;
+    padding: var(--nvui-space-15) var(--nvui-space-2);
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-block-bg);
+    cursor: pointer;
+}
+
+#wbe-overlay .wbe-hrow:hover {
+    background: var(--nvui-block-bg-2);
+}
+
+#wbe-overlay .wbe-hitrow {
+    margin: var(--nvui-space-1) 0;
+    padding: var(--nvui-space-1) var(--nvui-space-2);
+    border-left: var(--nvui-space-05) solid var(--nvui-text-3);
+    border-radius: 0 var(--nvui-radius-sm) var(--nvui-radius-sm) 0;
+    background: var(--nvui-block-bg);
+}
+
+#wbe-overlay .wbe-hitrow.is-constant {
+    border-left-color: var(--nvui-info);
+}
+
+#wbe-overlay .wbe-hitrow.is-selective {
+    border-left-color: var(--nvui-ok);
+}
+
+#wbe-overlay .wbe-hitrow.is-vectorized {
+    border-left-color: var(--nvui-accent);
+}
+
+/* ==========================================================================
+ * 6. 编辑区底部操作条与手机返回
+ * ========================================================================== */
+
+#wbe-overlay .wbe-footbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--nvui-space-2);
+    padding-top: var(--nvui-space-2);
+    border-top: 1px solid var(--nvui-glass-line);
+}
+
+#wbe-overlay .wbe-back {
+    display: none;
+}
+
+/* ==========================================================================
+ * 7. 600px 断点：双栏 → 单栏；导航互斥切换由 Kit 负责
+ * ========================================================================== */
+
+@media (max-width: 600px) {
+    #wbe-overlay .wbe-md {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    #wbe-overlay .wbe-md:not(.show-edit) .wbe-edit {
+        display: none;
+    }
+
+    #wbe-overlay .wbe-md.show-edit .wbe-list {
+        display: none;
+    }
+
+    #wbe-overlay .wbe-md.show-edit .wbe-back {
+        display: inline-flex;
+    }
+
+    #wbe-overlay .wbe-grid4 {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    #wbe-overlay .wbe-grid2 {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    #wbe-overlay .wbe-grid2.is-auto {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+}

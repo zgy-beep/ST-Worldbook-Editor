@@ -1,42 +1,15 @@
-// 世界书编辑器 v0.5 —— 酒馆助手脚本
-// 安装：酒馆助手 → 脚本库 → 新建脚本 → 粘贴全部内容 → 启用
-// 打开：魔法棒（扩展菜单）里的「世界书编辑器」，或给脚本添加名为「世界书编辑器」的按钮
-// 界面：基于 SillyTavern NVUI Kit v2.2.0（面板布局标准 + top-layer 浮层），首次打开时从 CDN 按需加载样式与 API
-(() => {
-  const W = window.parent, D = W.document;
-  try { W.__wbeTeardown && W.__wbeTeardown(); } catch { /* 忽略 */ }
-  $('#wbe-root,#wbe-layer,#wbe-style,#wbe-menu', D).remove();
-  $(D).off('keydown.wbe');
+// 世界书编辑器 v0.6.0 · SillyTavern 标准扩展业务模块
+import { buildMessages, parseAIJSON } from './ai-prompts.js';
+import { createWorldbookApi } from './worldbook-api.js';
 
-  // ---------- NVUI Kit 按需加载（README §2.1.3 方式 C：酒馆助手单文件脚本） ----------
-  const CDN = 'https://cdn.jsdelivr.net/gh/zgy-beep/ui-kit@v2.2.0';
+export function initializeEditor(runtime) {
+  const W = window, D = W.document, $ = W.jQuery;
   let NVUI = null;
-  function loadCss(id, href) {
-    return new Promise(res => {
-      if (D.getElementById(id)) return res();
-      const link = D.createElement('link');
-      link.id = id; link.rel = 'stylesheet'; link.href = href;
-      link.onload = link.onerror = () => res();
-      D.head.appendChild(link);
-      setTimeout(res, 5000);
-    });
-  }
   async function ensureNVUI() {
-    if (NVUI) return NVUI;
-    await Promise.all([
-      loadCss('nvui-css-tokens', `${CDN}/tokens.css`),
-      loadCss('nvui-css-components', `${CDN}/components.css`),
-    ]);
-    if (!W.NVUI || typeof W.NVUI.createPanel !== 'function') {
-      await new Promise((res, rej) => {
-        const s = D.createElement('script');
-        s.id = 'nvui-js-api'; s.src = `${CDN}/nvui-api.js`;
-        s.onload = res; s.onerror = () => rej(new Error('NVUI Kit 加载失败，请检查网络后重试'));
-        D.head.appendChild(s);
-      });
-    }
-    NVUI = W.NVUI;
-    return NVUI;
+    const api = runtime.NVUI;
+    if (!api || api.version !== '2.5.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.5.0');
+    NVUI = api;
+    return api;
   }
   // 操作反馈走 NVUI 吐司（top-layer，能显示在面板之上）；Kit 未加载时回退 toastr
   const toast = {
@@ -91,10 +64,9 @@
   };
   let root = null, panel = null, closeBtnEl = null, built = false;
   let capKey = null, capClick = null;
-  const CFG_KEY = 'wbe_settings_v1';
-  const CFG = Object.assign({ mode: 'st', apiurl: '', key: '', model: '', temp: 0.7, maxTokens: 4096, style: '', presets: [] },
-    (() => { try { return JSON.parse(W.localStorage.getItem(CFG_KEY) || '{}'); } catch { return {}; } })());
-  const saveCfg = () => { try { W.localStorage.setItem(CFG_KEY, JSON.stringify(CFG)); } catch { toast.error('设置保存失败'); } };
+  let qTimer = null, dragCleanup = null;
+  const CFG = runtime.getSettings();
+  const saveCfg = () => { try { runtime.saveSettings(); } catch (err) { toast.error('设置保存失败：' + (err.message || err)); } };
   if (CFG.sort) S.sort = CFG.sort;
   if (CFG.flt) S.flt = CFG.flt;
   if (CFG.groupFlt) S.groupFlt = CFG.groupFlt;
@@ -295,81 +267,15 @@
     try { return new RegExp(m[1], m[2]).test(t); } catch { return false; }
   };
   const guard = () => !S.dirty || confirm('有未保存的修改，确定放弃？');
-  const setDirty = v => { S.dirty = v; $('#wbe-dot', root).toggle(v); };
+  const setDirty = v => { S.dirty = v; $('#wbe-dot', root).prop('hidden', !v); };
   const askNum = l => { const v = prompt(l); return v === null || v.trim() === '' || isNaN(+v) ? null : +v; };
   const field = (l, i) => `<label class="wbe-field"><span>${l}</span>${i}</label>`;
 
-  // ---------- API 统一兼容层（向下兼容 getLorebook* 与现代 getWorldbook*） ----------
-  const getTH = () => window.TavernHelper || W.TavernHelper || {};
-  async function apiGetBooks() {
-    const th = getTH();
-    try {
-      if (typeof th.getWorldbookNames === 'function') return await th.getWorldbookNames();
-      if (typeof getWorldbookNames === 'function') return await getWorldbookNames();
-      if (typeof th.getLorebooks === 'function') return await th.getLorebooks();
-      if (typeof getLorebooks === 'function') return await getLorebooks();
-    } catch (e) { console.warn('[WBE] apiGetBooks error:', e); }
-    return [];
-  }
-  async function apiGetEntries(book) {
-    if (!book) return [];
-    const th = getTH();
-    try {
-      if (typeof th.getWorldbook === 'function') return await th.getWorldbook(book);
-      if (typeof getWorldbook === 'function') return await getWorldbook(book);
-      if (typeof th.getLorebookEntries === 'function') return await th.getLorebookEntries(book);
-      if (typeof getLorebookEntries === 'function') return await getLorebookEntries(book);
-    } catch (e) { console.warn('[WBE] apiGetEntries error:', e); }
-    return [];
-  }
-  async function apiSetEntries(book, entries) {
-    const th = getTH();
-    if (typeof th.setLorebookEntries === 'function') return await th.setLorebookEntries(book, entries);
-    if (typeof setLorebookEntries === 'function') return await setLorebookEntries(book, entries);
-    if (typeof th.updateWorldbookWith === 'function') {
-      return await th.updateWorldbookWith(book, curList => {
-        for (const item of entries) {
-          const target = curList.find(e => String(e.uid) === String(item.uid));
-          if (target) Object.assign(target, item);
-        }
-        return curList;
-      });
-    }
-    throw new Error('未找到更新世界书条目的接口 (setLorebookEntries / updateWorldbookWith)');
-  }
-  async function apiCreateEntries(book, entries) {
-    const th = getTH();
-    if (typeof th.createWorldbookEntries === 'function') return await th.createWorldbookEntries(book, entries);
-    if (typeof createWorldbookEntries === 'function') return await createWorldbookEntries(book, entries);
-    if (typeof th.createLorebookEntries === 'function') return await th.createLorebookEntries(book, entries);
-    if (typeof createLorebookEntries === 'function') return await createLorebookEntries(book, entries);
-    throw new Error('未找到新增世界书条目的接口 (createWorldbookEntries / createLorebookEntries)');
-  }
-  async function apiDeleteEntries(book, uids) {
-    const uidSet = new Set(uids.map(u => String(u)));
-    const th = getTH();
-    if (typeof th.deleteWorldbookEntries === 'function') return await th.deleteWorldbookEntries(book, e => uidSet.has(String(e.uid)));
-    if (typeof deleteWorldbookEntries === 'function') return await deleteWorldbookEntries(book, uids);
-    if (typeof th.deleteLorebookEntries === 'function') return await th.deleteLorebookEntries(book, uids);
-    if (typeof deleteLorebookEntries === 'function') return await deleteLorebookEntries(book, uids);
-    throw new Error('未找到删除世界书条目的接口 (deleteWorldbookEntries / deleteLorebookEntries)');
-  }
-  async function apiCreateBook(name) {
-    const th = getTH();
-    if (typeof th.createWorldbook === 'function') return await th.createWorldbook(name);
-    if (typeof createWorldbook === 'function') return await createWorldbook(name);
-    if (typeof th.createLorebook === 'function') return await th.createLorebook(name);
-    if (typeof createLorebook === 'function') return await createLorebook(name);
-    throw new Error('未找到创建世界书的接口 (createWorldbook / createLorebook)');
-  }
-  async function apiDeleteBook(name) {
-    const th = getTH();
-    if (typeof th.deleteWorldbook === 'function') return await th.deleteWorldbook(name);
-    if (typeof deleteWorldbook === 'function') return await deleteWorldbook(name);
-    if (typeof th.deleteLorebook === 'function') return await th.deleteLorebook(name);
-    if (typeof deleteLorebook === 'function') return await deleteLorebook(name);
-    throw new Error('未找到删除世界书的接口 (deleteWorldbook / deleteLorebook)');
-  }
+  // ---------- 酒馆助手运行时接口（标准扩展不依赖 iframe 裸变量） ----------
+  const getTH = () => runtime.getHelper() || {};
+  const { getBooks: apiGetBooks, getEntries: apiGetEntries, setEntries: apiSetEntries,
+    createEntries: apiCreateEntries, deleteEntries: apiDeleteEntries,
+    createBook: apiCreateBook, deleteBook: apiDeleteBook } = createWorldbookApi(getTH);
 
   // ---------- 数据读写 ----------
   async function loadBooks() {
@@ -386,6 +292,8 @@
     if (S.book && CFG.lastBook !== S.book) { CFG.lastBook = S.book; saveCfg(); }
     if (!cur()) S.sel = S.entries[0]?.uid ?? null;
     render();
+    refreshTool();
+    refreshAIMeta();
   }
   async function act(msg, fn) {
     try {
@@ -402,8 +310,7 @@
       const th = getTH();
       const targetEntries = JSON.parse(s.j);
       if (typeof th.replaceWorldbook === 'function') await th.replaceWorldbook(s.book, targetEntries);
-      else if (typeof replaceWorldbook === 'function') await replaceWorldbook(s.book, targetEntries);
-      else if (typeof replaceLorebookEntries === 'function') await replaceLorebookEntries(s.book, targetEntries);
+      else if (typeof th.replaceLorebookEntries === 'function') await th.replaceLorebookEntries(s.book, targetEntries);
       else {
         const now = await apiGetEntries(s.book);
         const nowUids = new Set(now.map(e => String(e.uid)));
@@ -506,10 +413,10 @@ ${GUIDE}
 }`;
 
   async function askJSON(system, user) {
-    try { return parseJSON(await ask(system, user)); }
+    try { return parseAIJSON(await ask(system, user, { format: 'json' })); }
     catch (err) {
       if (!/有效 JSON/.test(err.message)) throw err;
-      return parseJSON(await ask(system, user + '\n\n【注意】上一次的输出不是合法 JSON。这次只输出 JSON 数组或对象本身，不要任何其他文字。'));
+      return parseAIJSON(await ask(system, user, { format: 'json', retry: true }));
     }
   }
   const styleRef = skip => {
@@ -518,23 +425,15 @@ ${GUIDE}
     return c.length ? `\n\n【风格参考：现有条目示例（保持相同的格式、语气和详略程度，不要抄内容）】\n` + c.map(e => `《${A.name(e)}》\n${e.content}`).join('\n---\n') : '';
   };
 
-  async function ask(system, user) {
-    if (typeof generateRaw !== 'function') throw new Error('当前酒馆助手没有 generateRaw 接口，请更新酒馆助手');
-    if (CFG.style.trim()) system += `\n\n【创作者的统一设定与文风要求】\n${CFG.style.trim()}`;
-    const cfg = { ordered_prompts: [{ role: 'system', content: system }, { role: 'user', content: user }], should_stream: false };
+  async function ask(system, user, { format = 'text', retry = false } = {}) {
+    const th = getTH();
+    if (typeof th.generateRaw !== 'function') throw new Error('酒馆助手未就绪或没有 generateRaw 接口，请启用或更新酒馆助手');
+    const cfg = { ordered_prompts: buildMessages({ system, user, style: CFG.style, jailbreak: CFG.jailbreak, format, retry }), should_stream: false };
     if (CFG.mode === 'custom') {
       if (!CFG.apiurl || !CFG.model) throw new Error('请先在「设置」里填写接口地址和模型');
       cfg.custom_api = { apiurl: CFG.apiurl, key: CFG.key, model: CFG.model, max_tokens: CFG.maxTokens, temperature: CFG.temp };
     }
-    return await generateRaw(cfg);
-  }
-  function parseJSON(t) {
-    t = String(t).replace(/```(?:json)?/gi, '');
-    for (const [a, b] of [['[', ']'], ['{', '}']]) {
-      const i = t.indexOf(a), j = t.lastIndexOf(b);
-      if (i >= 0 && j > i) try { const v = JSON.parse(t.slice(i, j + 1)); return Array.isArray(v) ? v : [v]; } catch { /* 试下一种 */ }
-    }
-    throw new Error('AI 返回的不是有效 JSON：' + t.slice(0, 80));
+    return await th.generateRaw(cfg);
   }
   function chunks(list) {
     const out = []; let c = [], n = 0;
@@ -619,16 +518,18 @@ ${GUIDE}
     return `<div class="wbe-card"><label class="wbe-ahd"><input type="checkbox" class="aok" data-i="${i}" ${r.ok ? 'checked' : ''}><span class="nvui-badge ${e ? 'is-warn' : 'is-success'}">${e ? '修改' : '新增'}</span><b>${esc(e ? A.name(e) : d.name)}</b></label><details open><summary>查看改动</summary>${body}</details></div>`;
   }
   function renderAI() {
-    const a = S.ai, rs = a.results;
-    $('#wbe-ai-out', root).html(
+    const a = S.ai, rs = a.results, out = $('#wbe-ai-out', root);
+    if (!out.length) return;
+    out.html(
       `<div class="wbe-bar">${a.busy ? `<button type="button" class="nvui-btn is-ghost" data-a="aistop">取消</button><span class="nvui-spinner" aria-hidden="true"></span>` : `<button type="button" class="nvui-btn is-primary" data-a="aigo">${ico('fa-wand-magic-sparkles')}生成修改建议</button>`}<span class="nvui-hint">${esc(a.status)}</span></div>` +
       (rs.length && !a.busy
-        ? `<div class="wbe-bar"><button type="button" class="nvui-btn is-primary" data-a="aiapply">应用所选（${rs.filter(r => r.ok).length}）</button><button type="button" class="nvui-btn is-ghost" data-a="aiall">全选 / 取消</button><span class="nvui-hint">应用前自动存快照，可用标题栏「撤销」回退</span></div>${rs.map(card).join('')}`
+        ? `<div class="wbe-bar"><button type="button" class="nvui-btn is-primary" data-a="aiapply">应用所选（${rs.filter(r => r.ok).length}）</button><button type="button" class="nvui-btn is-ghost" data-a="aiall">全选 / 取消</button><span class="nvui-hint">应用前自动存快照，可用列表工具栏「撤销」回退</span></div>${rs.map(card).join('')}`
         : ''));
   }
   function aiSync(el) {
     const a = S.ai, n = el.name;
     if (n === 'instr') a.instr = el.value;
+    else if (n === 'jailbreak') { CFG.jailbreak = el.value; saveCfg(); }
     else if (n === 'scope') a.scope = el.value;
     else if (n === 'ctx') a.ctx = el.checked;
     else if (el.classList.contains('aok')) { a.results[+el.dataset.i].ok = el.checked; $('[data-a=aiapply]', root).text(`应用所选（${a.results.filter(r => r.ok).length}）`); }
@@ -653,9 +554,9 @@ ${GUIDE}
   ];
   function setHTML() {
     const c = CFG;
-    const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-on' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
+    const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.5</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.6.0</span></div>
       <div class="nvui-acc is-open">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -669,14 +570,14 @@ ${GUIDE}
         </div></div>
       </div>
       <div class="nvui-acc is-open">
-        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${c.style.trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${String(c.style || '').trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
-          <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style)}</textarea></label>
+          <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style || '')}</textarea></label>
         </div></div>
       </div>
-      <div class="wbe-bar" style="margin-top:var(--nvui-space-2)">
-        <span class="nvui-hint" style="flex:1 1 260px">修改后自动保存。API Key 以明文保存在本浏览器的 localStorage，请勿在公共设备上使用。</span>
-        <button type="button" class="nvui-btn is-sm is-danger" data-a="clearstorage" title="仅清理本编辑器的 API Key 与本地设置，不影响酒馆其他数据">${ico('fa-trash')}清理本脚本配置</button>
+      <div class="wbe-bar wbe-mt-2">
+        <span class="nvui-hint wbe-grow-hint">修改后自动保存。API Key 保存在当前酒馆用户的扩展设置中，请勿在公共设备上使用。</span>
+        <button type="button" class="nvui-btn is-sm is-danger" data-a="clearstorage" title="仅清理本编辑器的 API Key 与设置，不影响酒馆其他数据">${ico('fa-trash')}清理编辑器配置</button>
       </div>`;
   }
   function renderSet() {
@@ -688,12 +589,13 @@ ${GUIDE}
     else {
       CFG[{ s_apiurl: 'apiurl', s_key: 'key', s_model: 'model', s_temp: 'temp', s_max: 'maxTokens' }[n]] = el.type === 'number' ? +el.value : el.value.trim();
       if (n === 's_model' && CFG.mode === 'custom') $('#wbe-modesum', root).text(CFG.model || '自定义 API');
+      if (n === 's_model' || n === 's_apiurl') refreshAIMeta();
     }
     saveCfg(); $('#wbe-setmsg', root).text('已保存');
   }
   function toolHTML() {
     const t = S.tool;
-    const tgl = (k, l, on) => `<button type="button" class="nvui-btn is-sm${on ? ' is-on' : ''}" data-a="ttgl" data-k="${k}" aria-pressed="${on}">${l}</button>`;
+    const tgl = (k, l, on) => `<button type="button" class="nvui-btn is-sm${on ? ' is-secondary' : ''}" data-a="ttgl" data-k="${k}" aria-pressed="${on}">${l}</button>`;
     return `<div class="wbe-form">
       <div class="nvui-acc is-open">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-magnifying-glass')}全书查找替换</span><span class="nvui-acc-summary" id="wbe-tsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
@@ -706,7 +608,7 @@ ${GUIDE}
       <div class="nvui-acc is-open">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-vial')}触发测试</span><span class="nvui-acc-summary" id="wbe-ptsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
-          <textarea class="nvui-input wbe-probe" name="probe" placeholder="粘贴一段聊天文本，看会触发哪些条目">${esc(t.probe)}</textarea>
+          ${field('聊天文本', `<textarea class="nvui-input wbe-probe" name="probe" placeholder="粘贴一段聊天文本，看会触发哪些条目">${esc(t.probe)}</textarea>`)}
           <div id="wbe-hits"></div>
           <p class="nvui-hint">只按常驻和主关键词判断，不含次要关键词、递归、概率。</p>
         </div></div>
@@ -715,7 +617,7 @@ ${GUIDE}
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-stethoscope')}世界书体检与一致性审查</span><span class="nvui-acc-summary" id="wbe-hsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <div id="wbe-health"></div>
-          <div class="wbe-bar" style="margin-top:var(--nvui-space-2)">
+          <div class="wbe-bar wbe-mt-2">
             <button type="button" class="nvui-btn is-secondary" data-a="aiconflict">${ico('fa-wand-magic-sparkles')}AI 深度事实矛盾与冲突审查</button>
             <span class="nvui-hint" id="wbe-cf-status">检查跨条目的生卒状态、阵营归属、时序冲突及专有名词不一致</span>
           </div>
@@ -775,24 +677,25 @@ ${GUIDE}
     for (const x in km) if (km[x].length > 1) km[x].forEach(u => out.push([u, `关键词「${x}」被 ${km[x].length} 个条目共用`, nameOf(u), 'warn']));
     return out;
   }
-  function renderTool() {
-    $('#wbe-tool', root).html(toolHTML());
+  function refreshTool() {
+    const healthBox = $('#wbe-health', root);
+    if (!healthBox.length) return;
     const on = S.entries.filter(e => A.enabled(e)), h = health(), sum = l => l.reduce((s, e) => s + tokE(e), 0);
     $('#wbe-hsum', root).text(h.length ? `${h.length} 项关注` : '无明显问题');
     const badgeMap = { danger: 'is-danger', warn: 'is-warn', info: 'is-info' };
-    $('#wbe-health', root).html(`<p class="nvui-hint">启用 ${on.length} 条，合计约 ${sum(on)} tokens；其中常驻约 ${sum(on.filter(e => A.type(e) === 'constant'))} tokens。点击问题可跳转到对应条目。</p>` +
+    healthBox.html(`<p class="nvui-hint">启用 ${on.length} 条，合计约 ${sum(on)} tokens；其中常驻约 ${sum(on.filter(e => A.type(e) === 'constant'))} tokens。点击问题可跳转到对应条目。</p>` +
       (h.length ? h.slice(0, 80).map(([u, m, n, lvl]) => `<div class="wbe-hrow" data-a="goto" data-u="${esc(u)}"><span class="nvui-badge ${badgeMap[lvl] || 'is-warn'}">${lvl === 'danger' ? '严重' : lvl === 'warn' ? '警告' : '提示'}</span> <b>${esc(n)}</b> <span class="nvui-muted">${esc(m)}</span></div>`).join('') + (h.length > 80 ? `<p class="nvui-hint">还有 ${h.length - 80} 条未显示</p>` : '') : '<div class="nvui-alert is-success"><i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>没有发现明显问题</span></div>'));
-    if (S.tool.aiConflicts?.length) renderConflicts();
-    if (S.tool.probe) runTest();
+    renderConflicts();
+    if ($('[name=probe]', root).val()) runTest();
   }
   function renderConflicts() {
     const cfs = S.tool.aiConflicts || [];
     if (!cfs.length) { $('#wbe-conflicts', root).html(''); return; }
-    $('#wbe-conflicts', root).html(`<div class="wbe-card" style="border-left:3px solid var(--nvui-danger)"><div class="wbe-ahd"><span class="nvui-badge is-danger">AI 冲突体检报告</span><b>发现 ${cfs.length} 处潜在矛盾</b></div>` +
-      cfs.map(c => `<div class="wbe-card" style="margin-top:var(--nvui-space-1)">
+    $('#wbe-conflicts', root).html(`<div class="wbe-card wbe-card-danger"><div class="wbe-ahd"><span class="nvui-badge is-danger">AI 冲突体检报告</span><b>发现 ${cfs.length} 处潜在矛盾</b></div>` +
+      cfs.map(c => `<div class="wbe-card wbe-mt-1">
         <div class="wbe-ln"><span class="nvui-badge ${c.severity === 'danger' ? 'is-danger' : 'is-warn'}">${c.severity === 'danger' ? '严重事实矛盾' : '潜在冲突'}</span> <b>${esc(c.issue || '设定冲突')}</b></div>
-        <div class="nvui-hint" style="margin:4px 0">${esc(c.details || '')}</div>
-        <div class="wbe-ln" style="color:var(--nvui-ok);font-size:var(--nvui-fs-sm)"><b>建议方案：</b>${esc(c.fix_suggestion || '请根据上下文核实设定')}</div>
+        <div class="nvui-hint wbe-my-1">${esc(c.details || '')}</div>
+        <div class="wbe-ln wbe-fix"><b>建议方案：</b>${esc(c.fix_suggestion || '请根据上下文核实设定')}</div>
         ${c.uid != null ? `<button type="button" class="nvui-btn is-sm is-ghost" data-a="goto" data-u="${esc(c.uid)}">跳转至该条目修复</button>` : ''}
       </div>`).join('') + '</div>');
   }
@@ -842,7 +745,7 @@ ${GUIDE}
   }
   function startDrag(oe, rowEl) {
     if (!rowEl || !canDrag()) return;
-    const list = $('#wbe-items', root)[0], src = +$(rowEl).data('uid');
+    const list = $('#wbe-items', root)[0], scroller = panel && panel.body, src = +$(rowEl).data('uid');
     let x = oe.clientX, y = oe.clientY, target = null, after = false;
     const clear = () => $('.wbe-row', list).removeClass('drop-before drop-after');
     const pick = () => {
@@ -854,8 +757,9 @@ ${GUIDE}
     };
     const move = e => { x = e.clientX; y = e.clientY; pick(); };
     const tick = setInterval(() => {
-      const r = list.getBoundingClientRect();
-      if (y < r.top + 40) list.scrollTop -= 14; else if (y > r.bottom - 40) list.scrollTop += 14; else return;
+      if (!scroller) return;
+      const r = scroller.getBoundingClientRect();
+      if (y < r.top + 40) scroller.scrollTop -= 14; else if (y > r.bottom - 40) scroller.scrollTop += 14; else return;
       pick();
     }, 30);
     const cleanDrag = () => {
@@ -865,11 +769,13 @@ ${GUIDE}
       D.removeEventListener('pointercancel', end);
       W.removeEventListener('blur', cleanDrag);
       $(rowEl).removeClass('dragging'); clear(); D.body.style.cursor = '';
+      if (dragCleanup === cleanDrag) dragCleanup = null;
     };
     const end = async e => {
       cleanDrag();
       if (e.type === 'pointerup' && target) await commitMove(src, +$(target).data('uid'), after);
     };
+    dragCleanup = cleanDrag;
     W.addEventListener('blur', cleanDrag);
     $(rowEl).addClass('dragging'); D.body.style.cursor = 'grabbing';
     D.addEventListener('pointermove', move); D.addEventListener('pointerup', end); D.addEventListener('pointercancel', end);
@@ -887,16 +793,22 @@ ${GUIDE}
       isRendering = false;
     }
   }
-  function renderTab(key) {
-    if (key === 'entries') render();
-    else if (key === 'ai') { $('#wbe-ai', root).html(aiHTML()); renderAI(); }
-    else if (key === 'tool') renderTool();
-    else if (key === 'set') renderSet();
-  }
+  // 标签切换只切显示：各页 DOM 在 build 时一次挂载，切换不再重新生成
   function activateTab(key) {
+    if (!panel) return;
     S.tab = key;
     panel.setTab(key);
-    renderTab(key);
+  }
+  function syncActiveTab() {
+    const key = panel && panel.activeTab;
+    if (!key) return;
+    S.tab = key;
+    if (key === 'ai') {
+      S.ai.scope = S.checked.size && S.ai.scope === 'cur' ? 'sel' : !S.checked.size && S.ai.scope === 'sel' ? 'cur' : S.ai.scope;
+      $('[name=scope]', root).val(S.ai.scope);
+      refreshAIMeta();
+    }
+    if (key === 'tool') refreshTool();
   }
   function renderTop() {
     const bookOpts = S.books.map(b => `<option value="${esc(b)}" ${b === S.book ? 'selected' : ''}>${esc(b)}</option>`).join('') || '<option value="">（还没有世界书）</option>';
@@ -939,7 +851,7 @@ ${GUIDE}
       return `<div class="wbe-row ${(TYPE[t] || [])[1] || ''}${String(e.uid) === String(S.sel) ? ' on' : ''}${on2 ? '' : ' off'}" data-uid="${esc(e.uid)}">
         ${drag ? `<span class="wbe-grip" title="按住拖动排序">${ico('fa-grip-vertical')}</span>` : ''}<input type="checkbox" class="wbe-chk" ${S.checked.has(e.uid) ? 'checked' : ''} aria-label="选择条目">
         <div class="wbe-mid">
-          <div class="wbe-nm">${esc(A.name(e) || '（无标题）')} ${g ? `<span class="nvui-badge" style="font-size:10px;padding:0 4px">${esc(g)}</span>` : ''}</div>
+          <div class="wbe-nm">${esc(A.name(e) || '（无标题）')} ${g ? `<span class="nvui-badge">${esc(g)}</span>` : ''}</div>
           <div class="wbe-sub">${t === 'constant' ? '常驻' : esc(A.keys(e).join(', ') || '无主词')}${A.keysSec(e).length ? ` <span class="nvui-muted">+次要词(${A.keysSec(e).length})</span>` : ''}</div>
         </div>
         <span class="wbe-meta">${tokE(e)}t · #${A.order(e)}</span>
@@ -976,13 +888,13 @@ ${GUIDE}
           <span class="nvui-grow"></span>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="aisec">${ico('fa-wand-magic-sparkles')}AI 搭配次要词</button>
         </div>
-        <div class="wbe-bar" style="margin-bottom:var(--nvui-space-1)">
-          <select class="nvui-input" name="seclogic" style="font-size:var(--nvui-fs-sm);flex:1 1 200px">
+        <div class="wbe-bar wbe-mb-1">
+          <label class="wbe-mini"><span>次要逻辑</span><select class="nvui-input" name="seclogic">
             <option value="and_any" ${A.secLogic(e) === 'and_any' ? 'selected' : ''}>满足主词 + 出现任意次要词 (and_any)</option>
             <option value="and_all" ${A.secLogic(e) === 'and_all' ? 'selected' : ''}>满足主词 + 出现全部次要词 (and_all)</option>
             <option value="not_all" ${A.secLogic(e) === 'not_all' ? 'selected' : ''}>满足主词 + 至少一个次要词未出现 (not_all)</option>
             <option value="not_any" ${A.secLogic(e) === 'not_any' ? 'selected' : ''}>满足主词 + 完全不出现次要词 (not_any)</option>
-          </select>
+          </select></label>
         </div>
         <div class="wbe-chips wbe-secchips">${A.keysSec(e).map(chip).join('')}<input class="wbe-chipin wbe-secchipin" placeholder="添加次要词" aria-label="添加次要关键词"></div>
       </div>
@@ -1010,28 +922,41 @@ ${GUIDE}
       (e ? `<button type="button" class="nvui-btn is-sm${S.view === 'edit' ? ' is-secondary' : ''}" data-a="view" data-v="edit">编辑</button><button type="button" class="nvui-btn is-sm${S.view === 'json' ? ' is-secondary' : ''}" data-a="view" data-v="json">JSON</button>` : ''));
     if (!e) { body.html('<div class="nvui-empty">在左侧选择一个条目开始编辑。</div>'); foot.html(''); return; }
     if (S.view === 'json') {
-      body.html(`<div class="wbe-form wbe-fedit"><textarea class="nvui-input wbe-big" name="json" spellcheck="false">${esc(JSON.stringify(e, null, 2))}</textarea><p class="nvui-hint">可以直接改任何字段，字段名随酒馆助手版本而异。</p></div>`);
+      body.html(`<div class="wbe-form wbe-fedit"><label class="wbe-field"><span>条目 JSON</span><textarea class="nvui-input wbe-big" name="json" spellcheck="false">${esc(JSON.stringify(e, null, 2))}</textarea></label><p class="nvui-hint">可以直接改任何字段，字段名随酒馆助手版本而异。</p></div>`);
       foot.html('<button type="button" class="nvui-btn is-primary" data-a="applyjson">应用 JSON</button>');
     } else {
       body.html(editHTML(e));
-      foot.html(`<button type="button" class="nvui-btn is-primary" data-a="save">保存</button><span id="wbe-dot" class="nvui-hint is-warn" style="display:none"><span class="nvui-status-dot is-warn"></span> 未保存</span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-secondary" data-a="aicur">${ico('fa-wand-magic-sparkles')}AI 修改此条</button><button type="button" class="nvui-btn is-ghost" data-a="dup">复制</button><button type="button" class="nvui-btn is-danger" data-a="del">删除</button>`);
+      foot.html(`<button type="button" class="nvui-btn is-primary" data-a="save">保存</button><span id="wbe-dot" class="nvui-hint is-warn" hidden><span class="nvui-status-dot is-warn"></span> 未保存</span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-secondary" data-a="aicur">${ico('fa-wand-magic-sparkles')}AI 修改此条</button><button type="button" class="nvui-btn is-ghost" data-a="dup">复制</button><button type="button" class="nvui-btn is-danger" data-a="del">删除</button>`);
       updTok(true);
     }
     setDirty(S.dirty);
   }
+  function presetsHTML() {
+    return PRESETS.map(([l], i) => `<button type="button" class="nvui-btn is-sm is-ghost" data-a="preset" data-i="${i}">${l}</button>`).join('')
+      + CFG.presets.map((p, i) => `<span class="wbe-upr"><button type="button" class="nvui-btn is-sm is-ghost" data-a="upreset" data-i="${i}" title="${esc(p.t)}">${esc(p.l)}</button><button type="button" class="nvui-btn is-sm is-ghost wbe-upx" data-a="udel" data-i="${i}" aria-label="删除预设 ${esc(p.l)}">${ico('fa-xmark')}</button></span>`).join('')
+      + `<button type="button" class="nvui-btn is-sm is-ghost" data-a="usave">${ico('fa-plus')}保存当前指令为预设</button>`;
+  }
+  function refreshPresets() { const box = $('#wbe-presets', root); if (box.length) box.html(presetsHTML()); }
+  function refreshAIMeta() {
+    const n = { cur: cur() ? 1 : 0, sel: S.checked.size, all: S.entries.length };
+    const labels = { cur: `当前条目（${n.cur}）`, sel: `已勾选（${n.sel}）`, all: `全部条目（${n.all}）`, new: '新建条目（按描述生成）' };
+    for (const k in labels) $(`[name=scope] option[value=${k}]`, root).text(labels[k]);
+    $('#wbe-apihint', root).text(`当前接口：${CFG.mode === 'custom' ? (CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'}`);
+  }
   function aiHTML() {
     const a = S.ai, n = { cur: cur() ? 1 : 0, sel: S.checked.size, all: S.entries.length };
     const sc = [['cur', `当前条目（${n.cur}）`], ['sel', `已勾选（${n.sel}）`], ['all', `全部条目（${n.all}）`], ['new', '新建条目（按描述生成）']];
-    const tgl = (k, l) => `<button type="button" class="nvui-btn is-sm${a.f[k] ? ' is-on' : ''}" data-a="atgl" data-k="${k}" aria-pressed="${a.f[k]}">${l}</button>`;
+    const tgl = (k, l) => `<button type="button" class="nvui-btn is-sm${a.f[k] ? ' is-secondary' : ''}" data-a="atgl" data-k="${k}" aria-pressed="${a.f[k]}">${l}</button>`;
     return `<div class="nvui-panel-heading"><span class="nvui-section-title">AI 修改</span></div><div class="wbe-form">
-      <div class="wbe-presets">${PRESETS.map(([l], i) => `<button type="button" class="nvui-btn is-sm is-ghost" data-a="preset" data-i="${i}">${l}</button>`).join('')}${CFG.presets.map((p, i) => `<span class="wbe-upr"><button type="button" class="nvui-btn is-sm is-ghost" data-a="upreset" data-i="${i}" title="${esc(p.t)}">${esc(p.l)}</button><button type="button" class="nvui-btn is-sm is-ghost wbe-upx" data-a="udel" data-i="${i}" aria-label="删除预设 ${esc(p.l)}">${ico('fa-xmark')}</button></span>`).join('')}<button type="button" class="nvui-btn is-sm is-ghost" data-a="usave">${ico('fa-plus')}保存当前指令为预设</button></div>
+      <div class="wbe-presets" id="wbe-presets">${presetsHTML()}</div>
       ${field('你想怎么改？', `<textarea class="nvui-input" name="instr" rows="4" placeholder="例如：把内容改成第三人称客观描述，并补充同义关键词">${esc(a.instr)}</textarea>`)}
+      <label class="wbe-field"><span>破限提示词（可选）</span><textarea class="nvui-input" name="jailbreak" rows="3" placeholder="可选：填写希望追加到 AI 请求的补充提示词">${esc(CFG.jailbreak || '')}</textarea><span class="nvui-hint">追加到任务之后、JSON格式要求之前；留空不追加。适用于所有 AI 操作。</span></label>
       <div class="wbe-grid2">
         ${field('范围', `<select class="nvui-input" name="scope">${sc.map(([k, t]) => `<option value="${k}" ${a.scope === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
         <div class="wbe-field"><span>允许 AI 修改</span><div class="wbe-bar">${tgl('content', '内容')}${tgl('keys', '关键词')}${tgl('name', '标题')}</div></div>
       </div>
       <label class="nvui-switch-row wbe-swbare"><input type="checkbox" name="ctx" ${a.ctx ? 'checked' : ''}><span>附带背景：其他条目的标题/关键词，以及 2 个现有条目作为风格参考（更连贯，但多耗 token）</span></label>
-      <p class="nvui-hint">当前接口：${CFG.mode === 'custom' ? esc(CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'} <button type="button" class="nvui-btn is-sm is-ghost" data-a="gset">去设置</button>　AI 的结果不会直接写入，需要你逐项检查后点「应用」。快捷键 Ctrl+Enter 生成。</p>
+      <p class="nvui-hint"><span id="wbe-apihint">当前接口：${CFG.mode === 'custom' ? esc(CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'}</span> <button type="button" class="nvui-btn is-sm is-ghost" data-a="gset">去设置</button>　AI 的结果不会直接写入，需要你逐项检查后点「应用」。快捷键 Ctrl+Enter 生成。</p>
       <div id="wbe-ai-out"></div></div>`;
   }
   const updTok = (immediate = false) => {
@@ -1077,14 +1002,9 @@ ${GUIDE}
     $('#wbe-md', root).addClass('show-edit');
     updateRowSelection(uid);
     renderEditor();
-    const row = $('.wbe-row.on', root)[0];
-    const list = $('#wbe-items', root)[0];
-    if (row && list) {
-      const rTop = row.offsetTop, rBottom = rTop + row.offsetHeight;
-      const lTop = list.scrollTop, lBottom = lTop + list.clientHeight;
-      if (rTop < lTop) list.scrollTop = rTop;
-      else if (rBottom > lBottom) list.scrollTop = rBottom - list.clientHeight;
-    }
+    // 单滚动层：选中后只把编辑区带入可视范围，不再操作列表内部 scrollTop
+    const eb = $('#wbe-ebody', root)[0];
+    if (eb) eb.scrollIntoView({ block: 'nearest' });
   }
   function addChips(box, text) {
     const have = new Set($('.nvui-chip', box).map((_, c) => $(c).attr('data-k')).get());
@@ -1092,36 +1012,50 @@ ${GUIDE}
   }
 
   // ---------- 动作 ----------
-  const goEdit = uid => { S.sel = uid; S.view = 'edit'; setDirty(false); activateTab('entries'); $('#wbe-md', root).addClass('show-edit'); };
+  const goEdit = uid => {
+    if (uid == null) return;
+    S.sel = uid; S.view = 'edit'; setDirty(false);
+    $('#wbe-md', root).addClass('show-edit');
+    updateRowSelection(uid);
+    renderEditor();
+    activateTab('entries');
+    const eb = $('#wbe-ebody', root)[0];
+    if (eb) eb.scrollIntoView({ block: 'nearest' });
+  };
   const actions = {
     close() { if (guard()) { setDirty(false); panel.close(); } },
     back: () => $('#wbe-md', root).removeClass('show-edit'),
     view(el) { const v = el.data('v'); if (v === S.view) return; if (!guard()) return; setDirty(false); S.view = v; renderEditor(); },
-    aicur() { if (!guard()) return; setDirty(false); S.ai.scope = 'cur'; activateTab('ai'); },
-    aibatch() { if (!guard()) return; setDirty(false); S.ai.scope = 'sel'; activateTab('ai'); },
-    preset(el) { const p = PRESETS[+el.data('i')]; S.ai.instr = p[1]; if (p[2]) S.ai.scope = p[2]; renderTab('ai'); $('[name=instr]', root).trigger('focus'); },
-    upreset(el) { S.ai.instr = CFG.presets[+el.data('i')].t; renderTab('ai'); $('[name=instr]', root).trigger('focus'); },
-    udel(el) { CFG.presets.splice(+el.data('i'), 1); saveCfg(); renderTab('ai'); },
+    aicur() { if (!guard()) return; setDirty(false); S.ai.scope = 'cur'; $('[name=scope]', root).val('cur'); activateTab('ai'); },
+    aibatch() { if (!guard()) return; setDirty(false); S.ai.scope = 'sel'; $('[name=scope]', root).val('sel'); activateTab('ai'); },
+    preset(el) {
+      const p = PRESETS[+el.data('i')]; S.ai.instr = p[1]; if (p[2]) S.ai.scope = p[2];
+      $('[name=instr]', root).val(S.ai.instr);
+      if (p[2]) $('[name=scope]', root).val(S.ai.scope);
+      $('[name=instr]', root).trigger('focus');
+    },
+    upreset(el) {
+      S.ai.instr = CFG.presets[+el.data('i')].t;
+      $('[name=instr]', root).val(S.ai.instr).trigger('focus');
+    },
+    udel(el) { CFG.presets.splice(+el.data('i'), 1); saveCfg(); refreshPresets(); },
     usave() {
       const t = S.ai.instr.trim(); if (!t) return toast.warning('请先写下指令');
       const l = (prompt('预设名称（简短）', t.slice(0, 6)) || '').trim(); if (!l) return;
-      CFG.presets.push({ l, t }); saveCfg(); renderTab('ai');
+      CFG.presets.push({ l, t }); saveCfg(); refreshPresets();
     },
     gset() { if (!guard()) return; setDirty(false); activateTab('set'); },
-    atgl(el) { const k = el.data('k'); S.ai.f[k] = !S.ai.f[k]; el.toggleClass('is-on', S.ai.f[k]).attr('aria-pressed', String(S.ai.f[k])); },
-    ttgl(el) { const k = el.data('k'), v = k === 're' ? (S.tool.re = !S.tool.re) : (S.tool.f[k] = !S.tool.f[k]); el.toggleClass('is-on', v).attr('aria-pressed', String(v)); },
-    smode(el) { CFG.mode = el.data('v'); saveCfg(); renderSet(); },
+    atgl(el) { const k = el.data('k'); S.ai.f[k] = !S.ai.f[k]; el.toggleClass('is-secondary', S.ai.f[k]).attr('aria-pressed', String(S.ai.f[k])); },
+    ttgl(el) { const k = el.data('k'), v = k === 're' ? (S.tool.re = !S.tool.re) : (S.tool.f[k] = !S.tool.f[k]); el.toggleClass('is-secondary', v).attr('aria-pressed', String(v)); },
+    smode(el) { CFG.mode = el.data('v'); saveCfg(); renderSet(); refreshAIMeta(); },
     clearstorage() {
-      if (!confirm('确定清理【世界书编辑器】保存在本机的 API Key 与配置吗？\n\n（仅清理本脚本的 wbe_* 配置，绝不会影响酒馆其他设置或聊天数据）')) return;
+      if (!confirm('确定清理世界书编辑器的 API Key、提示词和布局设置吗？')) return;
       try {
-        W.localStorage.removeItem(CFG_KEY);
-        Object.keys(W.localStorage).forEach(k => { if (k.startsWith('wbe_')) W.localStorage.removeItem(k); });
-        Object.keys(CFG).forEach(k => delete CFG[k]);
-        Object.assign(CFG, { mode: 'st', apiurl: '', key: '', model: '', temp: 0.7, maxTokens: 4096, style: '', presets: [] });
-        S.sort = 'idx'; S.flt = 'all';
-        renderSet();
-        if (S.tab === 'ai') renderTab('ai');
-        toast.success('已清理本脚本的配置与 API Key');
+        runtime.resetSettings();
+        S.sort = 'idx'; S.flt = 'all'; S.groupFlt = 'all';
+        renderSet(); refreshPresets(); refreshAIMeta(); render();
+        $('[name=jailbreak]', root).val(CFG.jailbreak);
+        toast.success('已清理编辑器配置与 API Key');
       } catch (err) { toast.error('清理失败：' + (err.message || err)); }
     },
     more() { S.limit += 300; renderList(); },
@@ -1134,7 +1068,8 @@ ${GUIDE}
       try {
         const r = await fetch(base + '/models', { headers: CFG.key ? { Authorization: 'Bearer ' + CFG.key } : {} });
         const j = await r.json(); S.models = (j.data || j.models || []).map(m => m.id || m.name || m).filter(Boolean).sort();
-        toast.success(`拉取到 ${S.models.length} 个模型`); renderSet();
+        $('#wbe-models', root).html(S.models.map(m => `<option value="${esc(m)}">`).join(''));
+        toast.success(`拉取到 ${S.models.length} 个模型`);
       } catch { toast.error('拉取失败（可能被跨域限制），请手动输入模型名'); }
     },
     async settest() {
@@ -1154,8 +1089,8 @@ ${GUIDE}
       el.prop('disabled', true).html('<span class="nvui-spinner" aria-hidden="true"></span> 生成中…');
       try {
         const have = $('.wbe-mainchips .nvui-chip', root).map((_, x) => $(x).attr('data-k')).get().join('、') || '无';
-        const r = await askJSON(`你是资深的 SillyTavern 世界书编辑。\n${GUIDE}\n\n任务：根据条目内容给出 5–10 个触发关键词（含别称、简称、常见称呼；中文以 2–6 字为宜）。只输出 JSON 字符串数组，不要解释。`, `【标题】${$('[name=name]', root).val()}\n【已有关键词（不要重复）】${have}\n【内容】${c}`);
-        addChips(box, norm.keys(r).join(',')); setDirty(true);
+        const r = await askJSON(`你是资深的 SillyTavern 世界书编辑。\n${GUIDE}\n\n任务：根据条目内容给出 5–10 个触发关键词（含别称、简称、常见称呼；中文以 2–6 字为宜）。只输出 JSON 对象，格式为 {"keys":["关键词1","关键词2"]}，不要解释。`, `【标题】${$('[name=name]', root).val()}\n【已有关键词（不要重复）】${have}\n【内容】${c}`);
+        addChips(box, norm.keys(r[0]?.keys).join(',')); setDirty(true);
       } catch (err) { toast.error('生成失败：' + (err.message || err)); }
       el.prop('disabled', false).html(old);
     },
@@ -1188,9 +1123,9 @@ ${GUIDE}
         const res = Array.isArray(r) ? r[0] : r;
         if (res && res.pos) {
           S.lastRecom = res;
-          out.html(`<div class="wbe-card" style="border-left:3px solid var(--nvui-accent);margin-top:var(--nvui-space-1)">
+          out.html(`<div class="wbe-card wbe-card-accent wbe-mt-1">
             <div class="wbe-ln"><b>推荐位置：</b><span class="nvui-badge is-accent">${esc(POS[res.pos] || res.pos)}</span> · 深度：<b>${esc(res.depth ?? 0)}</b> · 顺序：<b>#${esc(res.order ?? 100)}</b></div>
-            <div class="nvui-hint" style="margin:4px 0">${esc(res.reason || '根据内容特征智能推荐')}</div>
+            <div class="nvui-hint wbe-my-1">${esc(res.reason || '根据内容特征智能推荐')}</div>
             <div class="wbe-bar"><button type="button" class="nvui-btn is-sm is-primary" data-a="applyrecom">采纳推荐</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="droprecom">放弃</button></div>
           </div>`);
         } else {
@@ -1246,7 +1181,7 @@ ${GUIDE}
     selins() { const r = S.selRes, ta = $('[name=content]', root)[0]; if (!r || !ta || r.book !== S.book || r.uid !== S.sel) return; ta.value = r.has ? ta.value.slice(0, r.b) + r.text + ta.value.slice(r.b) : ta.value + '\n' + r.text; setDirty(true); updTok(); $('#wbe-selout', root).html(''); },
     seldrop() { $('#wbe-selout', root).html(''); },
     aigo: runAI,
-    aistop() { S.ai.cancel = true; try { stopAllGeneration(); } catch { /* 忽略 */ } },
+    aistop() { S.ai.cancel = true; try { getTH().stopAllGeneration?.(); } catch { /* 忽略 */ } },
     aiapply: applyAI,
     aiall() { const r = S.ai.results, all = r.every(x => x.ok); r.forEach(x => (x.ok = !all)); renderAI(); },
     undo,
@@ -1326,7 +1261,7 @@ ${GUIDE}
       await act('已复制', () => apiCreateEntries(S.book, [r]));
     },
     async del() {
-      const e = cur(); if (!e || !confirm(`删除条目「${A.name(e)}」？（可用标题栏「撤销」恢复）`)) return;
+      const e = cur(); if (!e || !confirm(`删除条目「${A.name(e)}」？（可用列表工具栏的「撤销」恢复）`)) return;
       setDirty(false); await act('已删除', () => apiDeleteEntries(S.book, [e.uid]));
     },
     async applyjson() {
@@ -1356,136 +1291,53 @@ ${GUIDE}
   };
 
   // ---------- 构建界面 ----------
-  // 业务侧补充样式：只用 Kit 的 --nvui-* 令牌（无硬编码颜色 / 无 emoji / 无 !important / 无裸元素选择器）
-  const CSS = `
-  #wbe-layer{z-index:2147483647 !important;position:fixed !important;inset:0 !important;margin:0 !important}
-  #wbe-overlay{z-index:2147483647 !important}
-  #wbe-overlay *{box-sizing:border-box !important}
-  #wbe-overlay input,#wbe-overlay textarea,#wbe-overlay select{box-sizing:border-box !important;max-width:100% !important}
-  #wbe-overlay .nvui-panel{--nvui-panel-width:1240px}
-  #wbe-overlay .nvui-switch-row input[type="checkbox"]{animation:none !important}
-  #wbe-overlay .wbe-rowsw input[type="checkbox"]{animation:none !important;transition:none !important}
-  #wbe-overlay .wbe-rowsw input[type="checkbox"]::after{transition:none !important}
-  #wbe-overlay .nvui-panel-body{display:flex;flex-direction:column;overflow:hidden}
-  #wbe-overlay .nvui-tabpane.is-active{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
-  #wbe-overlay .wbe-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-3) var(--nvui-space-4)}
-  #wbe-overlay .wbe-scroll::-webkit-scrollbar{display:none}
-  #wbe-overlay .wbe-scroll>div{max-width:920px;width:100%;margin:0 auto}
-  #wbe-overlay .wbe-md{flex:1 1 auto;min-height:0;display:flex;gap:var(--nvui-space-3)}
-  #wbe-overlay .wbe-list{width:340px;flex:none;display:flex;flex-direction:column;gap:var(--nvui-space-2);min-height:0}
-  #wbe-overlay .wbe-items{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-15) var(--nvui-space-1);display:flex;flex-direction:column;gap:var(--nvui-space-15)}
-  #wbe-overlay .wbe-items::-webkit-scrollbar{display:none}
-  #wbe-overlay .wbe-edit{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:var(--nvui-space-2);min-height:0}
-  #wbe-overlay .wbe-edit-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;padding:var(--nvui-space-2) var(--nvui-space-3)}
-  #wbe-overlay .wbe-edit-scroll::-webkit-scrollbar{display:none}
-  #wbe-overlay .wbe-bar{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap}
-  #wbe-overlay .wbe-bar .nvui-input{flex:1 1 auto;min-width:70px}
-  #wbe-overlay .wbe-form{display:flex;flex-direction:column;gap:var(--nvui-space-25)}
-  #wbe-overlay .wbe-field{display:flex;flex-direction:column;gap:var(--nvui-space-1);min-width:0;width:100%;color:var(--nvui-text-2);font-size:var(--nvui-fs-md)}
-  #wbe-overlay .wbe-field>.nvui-input{width:100% !important;max-width:100% !important;box-sizing:border-box !important}
-  #wbe-overlay .wbe-lbl{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap}
-  #wbe-overlay .wbe-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--nvui-space-2)}
-  #wbe-overlay .wbe-grid2.is-auto{grid-template-columns:minmax(0,1fr) auto;align-items:end}
-  #wbe-overlay .wbe-grid4{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:var(--nvui-space-2)}
-  #wbe-overlay .wbe-swbare{border-bottom:none}
-  #wbe-overlay .wbe-batch{display:none;align-items:center;gap:var(--nvui-space-15);flex-wrap:wrap;padding:var(--nvui-space-15) var(--nvui-space-2);border-radius:var(--nvui-radius-sm);background:var(--nvui-accent-bg);font-size:var(--nvui-fs-sm)}
-  #wbe-overlay .wbe-list.has-sel .wbe-batch{display:flex}
-  #wbe-overlay .wbe-row{display:flex;gap:var(--nvui-space-2);align-items:center;padding:var(--nvui-space-2) var(--nvui-space-25);cursor:pointer;border-radius:var(--nvui-radius-sm);border-left:3px solid var(--wbe-c,var(--nvui-text-3));background:var(--nvui-block-bg);transition:background-color var(--nvui-transition),border-color var(--nvui-transition)}
-  #wbe-overlay .wbe-row:hover{background:var(--nvui-block-bg-2)}
-  #wbe-overlay .wbe-row.on{background:var(--nvui-accent-bg)}
-  #wbe-overlay .wbe-row.off .wbe-mid{opacity:.45}
-  #wbe-overlay .wbe-row.dragging{opacity:.45}
-  #wbe-overlay .wbe-row.drop-before{box-shadow:inset 0 3px 0 var(--nvui-accent)}
-  #wbe-overlay .wbe-row.drop-after{box-shadow:inset 0 -3px 0 var(--nvui-accent)}
-  #wbe-overlay .wbe-row.is-constant,#wbe-overlay .wbe-hitrow.is-constant{--wbe-c:var(--nvui-info)}
-  #wbe-overlay .wbe-row.is-selective,#wbe-overlay .wbe-hitrow.is-selective{--wbe-c:var(--nvui-ok)}
-  #wbe-overlay .wbe-row.is-vectorized,#wbe-overlay .wbe-hitrow.is-vectorized{--wbe-c:var(--nvui-accent)}
-  #wbe-overlay .wbe-grip{cursor:grab;color:var(--nvui-text-3);touch-action:none;user-select:none;-webkit-user-select:none;flex:none}
-  #wbe-overlay .wbe-grip:hover{color:var(--nvui-text)}
-  #wbe-overlay .wbe-mid{flex:1 1 auto;min-width:0}
-  #wbe-overlay .wbe-nm{font-weight:var(--nvui-fw-semibold);font-size:var(--nvui-fs-md);line-height:var(--nvui-lh-normal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #wbe-overlay .wbe-sub{font-size:var(--nvui-fs-sm);color:var(--nvui-text-3);line-height:var(--nvui-lh-normal);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #wbe-overlay .wbe-meta{font-size:var(--nvui-fs-xs);color:var(--nvui-text-3);white-space:nowrap;flex:none}
-  #wbe-overlay .wbe-rowsw{padding:0;border-bottom:none;flex:0 0 auto;margin-left:var(--nvui-space-1)}
-  #wbe-overlay .wbe-more{width:100%;margin:var(--nvui-space-1) 0}
-  #wbe-overlay #wbe-hint:empty{display:none}
-  #wbe-overlay .wbe-chips{display:flex;flex-wrap:wrap;gap:var(--nvui-space-1);padding:var(--nvui-space-15);background:var(--nvui-input-bg);border-radius:var(--nvui-radius-sm);cursor:text;width:100%;box-sizing:border-box !important}
-  #wbe-overlay .wbe-chips:focus-within{outline:var(--nvui-focus-ring-w) solid var(--nvui-focus-ring-color);outline-offset:var(--nvui-focus-ring-offset)}
-  #wbe-overlay .wbe-chips .nvui-chip{background:var(--nvui-accent-bg);color:var(--nvui-text)}
-  #wbe-overlay .wbe-chipin{flex:1 1 auto;min-width:90px;background:none;border:none;outline:none;color:var(--nvui-text);font:inherit;padding:2px var(--nvui-space-1)}
-  #wbe-overlay .wbe-chipx{display:inline-flex;align-items:center;border:none;background:none;color:inherit;cursor:pointer;padding:0 2px;font-size:var(--nvui-fs-xs);opacity:.6}
-  #wbe-overlay .wbe-chipx:hover{opacity:1}
-  #wbe-overlay .nvui-btn.is-on{background:var(--nvui-accent-bg);color:var(--nvui-accent-2)}
-  #wbe-overlay .wbe-presets{display:flex;gap:var(--nvui-space-15);flex-wrap:wrap}
-  #wbe-overlay .wbe-upr{display:inline-flex}
-  #wbe-overlay .wbe-upr .nvui-btn:first-child{border-radius:var(--nvui-radius-sm) 0 0 var(--nvui-radius-sm)}
-  #wbe-overlay .wbe-upr .wbe-upx{border-radius:0 var(--nvui-radius-sm) var(--nvui-radius-sm) 0;padding-left:var(--nvui-space-1);padding-right:var(--nvui-space-2)}
-  #wbe-overlay .wbe-card{border-radius:var(--nvui-radius);background:var(--nvui-block-bg);padding:var(--nvui-space-2) var(--nvui-space-3);margin-bottom:var(--nvui-space-2)}
-  #wbe-overlay .wbe-ahd{display:flex;align-items:center;gap:var(--nvui-space-2);cursor:pointer}
-  #wbe-overlay .wbe-card summary{cursor:pointer;font-size:var(--nvui-fs-sm);color:var(--nvui-text-3);margin-top:var(--nvui-space-1)}
-  #wbe-overlay .wbe-ln{font-size:var(--nvui-fs-md);padding:3px 0}
-  #wbe-overlay .wbe-ln s{color:var(--nvui-text-3)}
-  #wbe-overlay .wbe-diff{margin-top:var(--nvui-space-1);max-height:300px;overflow:auto;font-size:var(--nvui-fs-sm);border-radius:var(--nvui-radius-sm);background:var(--nvui-input-bg)}
-  #wbe-overlay .wbe-diff div{padding:1px var(--nvui-space-2);white-space:pre-wrap;word-break:break-word;min-height:1.4em}
-  #wbe-overlay .wbe-add{background:var(--nvui-ok-bg)}
-  #wbe-overlay .wbe-del{background:var(--nvui-danger-bg)}
-  #wbe-overlay .wbe-same{color:var(--nvui-text-3)}
-  #wbe-overlay .wbe-hrow{padding:var(--nvui-space-15) var(--nvui-space-2);margin:var(--nvui-space-1) 0;border-radius:var(--nvui-radius-sm);background:var(--nvui-block-bg);cursor:pointer}
-  #wbe-overlay .wbe-hrow:hover{background:var(--nvui-block-bg-2)}
-  #wbe-overlay .wbe-hitrow{padding:var(--nvui-space-1) var(--nvui-space-2);margin:var(--nvui-space-1) 0;border-left:3px solid var(--wbe-c,var(--nvui-text-3));background:var(--nvui-block-bg);border-radius:0 var(--nvui-radius-sm) var(--nvui-radius-sm) 0}
-  #wbe-overlay .wbe-footbar{display:flex;gap:var(--nvui-space-2);align-items:center;flex-wrap:wrap;padding-top:var(--nvui-space-2);border-top:1px solid var(--nvui-glass-line);flex:none}
-  #wbe-overlay .nvui-acc-inner::before{height:var(--nvui-space-15)}
-  #wbe-overlay textarea.nvui-input{resize:vertical;line-height:var(--nvui-lh-relaxed);width:100% !important;max-width:100% !important;box-sizing:border-box !important;margin:0}
-  #wbe-overlay .wbe-big{min-height:260px;width:100% !important;max-width:100% !important}
-  #wbe-overlay .wbe-probe{width:100% !important;max-width:100% !important;min-height:120px;box-sizing:border-box !important;margin:var(--nvui-space-1) 0}
-  #wbe-overlay .wbe-back{display:none}
-  @media(max-width:600px){
-    #wbe-overlay .wbe-md{flex-direction:column}
-    #wbe-overlay .wbe-list{width:100%;flex:1 1 auto}
-    #wbe-overlay .wbe-md:not(.show-edit) .wbe-edit{display:none}
-    #wbe-overlay .wbe-md.show-edit .wbe-list{display:none}
-    #wbe-overlay .wbe-md.show-edit .wbe-back{display:inline-flex}
-    #wbe-overlay .wbe-grid4{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-    #wbe-overlay .wbe-grid2{grid-template-columns:minmax(0,1fr)}
-    #wbe-overlay .wbe-grid2.is-auto{grid-template-columns:minmax(0,1fr) auto}
-  }`;
+  // 业务样式全部在 style.css（顶部相对 @import ui-kit/tokens.css + components.css）；
+  // 本文件不再注入 <style>，也不改面板宽度/层级/滚动模型。
 
   async function build() {
     if (built) return;
     await ensureNVUI();
-    $('<style id="wbe-style"></style>', D).text(CSS).appendTo(D.head);
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.5',
+      version: 'v0.6.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
-      actions: [{ icon: 'fa-solid fa-rotate-left', label: '撤销', onClick: () => actions.undo() }],
+      // 2.5.0 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
+      persist: { size: true, tab: true, accordion: true, storage: runtime.layoutStorage },
+      themeToggle: true,
+      onThemeChange(theme) { panel.dialog.classList.toggle('nvui-theme-light', theme === 'light'); },
+      focusFallback: '#extensionsMenuButton',
       onClose() { setDirty(false); $('#wbe-md', root).removeClass('show-edit'); },
+      destroy() { cleanupOwn(); },
     });
+    if (!panel) throw new Error('NVUI Kit 面板创建失败');
     panel.dialog.classList.add('nvui-scope');
+    panel.dialog.classList.toggle('nvui-theme-light', D.body.classList.contains('nvui-theme-light'));
     root = $(panel.panel);
     closeBtnEl = panel.panel.querySelector('.nvui-panel-actions').lastElementChild;
     built = true;
 
-    // —— 四个分区的静态骨架 ——
+    // —— 四个分区一次性挂载；之后 tab 只切显示，不再重建 DOM ——
     $('#wbe-pane-entries', panel.body).html(`<div class="wbe-md" id="wbe-md">
       <div class="wbe-list" id="wbe-list">
         <div class="wbe-bar">
-          <select id="wbe-book" class="nvui-input" aria-label="选择世界书"></select>
+          <label class="wbe-mini wbe-mini-grow"><span>世界书</span><select id="wbe-book" class="nvui-input"></select></label>
           <button type="button" class="nvui-icon-btn" data-a="newbook" title="新建世界书" aria-label="新建世界书">${ico('fa-plus')}</button>
           <button type="button" class="nvui-icon-btn" data-a="delbook" title="删除世界书" aria-label="删除世界书">${ico('fa-trash')}</button>
           <button type="button" class="nvui-icon-btn" data-a="import" title="导入条目 (JSON / CSV)" aria-label="导入条目">${ico('fa-file-import')}</button>
           <button type="button" class="nvui-icon-btn" data-a="export" title="导出 JSON" aria-label="导出 JSON">${ico('fa-file-code')}</button>
           <button type="button" class="nvui-icon-btn" data-a="exportcsv" title="导出 CSV 表格 (Excel 兼容)" aria-label="导出 CSV">${ico('fa-file-csv')}</button>
         </div>
-        <div class="wbe-bar"><input id="wbe-q" class="nvui-input" placeholder="搜索标题、关键词、分组、内容" aria-label="搜索条目"></div>
-        <div class="wbe-bar"><select id="wbe-gflt" class="nvui-input" aria-label="按分组筛选"></select></div>
+        <label class="wbe-mini"><span>搜索</span><input id="wbe-q" class="nvui-input" placeholder="标题、关键词、分组、内容"></label>
+        <label class="wbe-mini"><span>分组</span><select id="wbe-gflt" class="nvui-input"></select></label>
         <div class="wbe-bar">
-          <select id="wbe-flt" class="nvui-input" aria-label="按类型筛选">${[['all', '全部类型'], ['constant', '常驻'], ['selective', '关键词'], ['vectorized', '向量'], ['off', '已禁用']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select>
-          <select id="wbe-sort" class="nvui-input" aria-label="排序方式">${[['idx', '显示顺序（可拖拽）'], ['order', '按 order（可拖拽）'], ['name', '按标题'], ['tok', '按长度']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select>
-          <select id="wbe-tpl" class="nvui-input" title="新建条目使用的模板" aria-label="新建条目模板">${Object.entries(TPL).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select>
-          <button type="button" class="nvui-btn is-primary is-sm" data-a="new">${ico('fa-plus')}条目</button>
+          <label class="wbe-mini"><span>类型</span><select id="wbe-flt" class="nvui-input">${[['all', '全部类型'], ['constant', '常驻'], ['selective', '关键词'], ['vectorized', '向量'], ['off', '已禁用']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></label>
+          <label class="wbe-mini"><span>排序</span><select id="wbe-sort" class="nvui-input">${[['idx', '显示顺序（可拖拽）'], ['order', '按 order（可拖拽）'], ['name', '按标题'], ['tok', '按长度']].map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></label>
+        </div>
+        <div class="wbe-bar">
+          <label class="wbe-mini"><span>新建模板</span><select id="wbe-tpl" class="nvui-input">${Object.entries(TPL).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></label>
+          <button type="button" class="nvui-btn is-primary is-sm" data-a="new">${ico('fa-plus')}新建条目</button>
         </div>
         <div class="wbe-batch"><b id="wbe-selcnt"></b>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="on">启用</button>
@@ -1494,36 +1346,54 @@ ${GUIDE}
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="border">顺序</button>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="bdepth">深度</button>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="bprob">概率</button>
-          <select id="wbe-bpos" class="nvui-input" aria-label="批量设置位置"></select>
+          <label class="wbe-mini"><span>批量位置</span><select id="wbe-bpos" class="nvui-input"></select></label>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="bpos">设位置</button>
           <button type="button" class="nvui-btn is-sm is-secondary" data-a="aibatch">${ico('fa-wand-magic-sparkles')}AI</button>
           <button type="button" class="nvui-btn is-sm is-danger" data-a="bdel">删除</button>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="clrsel">取消选择</button>
         </div>
-        <div class="wbe-bar"><span class="nvui-hint" id="wbe-count"></span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="selall">全选 / 取消</button></div>
+        <div class="wbe-bar"><span class="nvui-hint" id="wbe-count"></span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="undo">${ico('fa-rotate-left')}撤销</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="selall">全选 / 取消</button></div>
         <div id="wbe-hint" class="nvui-hint"></div>
         <div id="wbe-items" class="wbe-items"></div>
       </div>
       <div class="wbe-edit">
         <div class="wbe-bar" id="wbe-ebar"></div>
-        <div class="wbe-edit-scroll" id="wbe-ebody"></div>
+        <div class="wbe-edit-body" id="wbe-ebody"></div>
         <div class="wbe-footbar" id="wbe-efoot"></div>
       </div>
     </div>`);
-    $('#wbe-pane-ai', panel.body).html('<div class="wbe-scroll"><div id="wbe-ai" class="wbe-fai"></div></div>');
-    $('#wbe-pane-tool', panel.body).html('<div class="wbe-scroll"><div id="wbe-tool" class="wbe-ftool"></div></div>');
-    $('#wbe-pane-set', panel.body).html('<div class="wbe-scroll"><div id="wbe-set" class="wbe-fset"></div></div>');
+    $('#wbe-pane-ai', panel.body).html(`<div id="wbe-ai" class="wbe-fai wbe-page">${aiHTML()}</div>`);
+    $('#wbe-pane-tool', panel.body).html(`<div id="wbe-tool" class="wbe-ftool wbe-page">${toolHTML()}</div>`);
+    $('#wbe-pane-set', panel.body).html(`<div id="wbe-set" class="wbe-fset wbe-page">${setHTML()}</div>`);
 
-    // —— 顶部 tabs / 手机底部导航共享同一份状态；这里挂业务侧守卫与懒渲染 ——
-    const userTab = key => {
-      if (key === S.tab) return;
-      if (!guard()) { panel.setTab(S.tab); return; }
-      setDirty(false);
-      if (key === 'ai') S.ai.scope = S.checked.size && S.ai.scope === 'cur' ? 'sel' : !S.checked.size && S.ai.scope === 'sel' ? 'cur' : S.ai.scope;
-      activateTab(key);
+    // —— 顶部 tabs / 手机底部导航共享同一份状态；Kit 负责切换显示，这里只做未保存守卫与状态镜像 ——
+    const navKeyOf = ev => {
+      const btn = ev.target && ev.target.closest ? ev.target.closest('.nvui-tab, .nvui-bottom-nav-item') : null;
+      return btn ? (btn.dataset.key || btn.dataset.tab || '') : '';
     };
-    panel.tabs && [...panel.tabs.querySelectorAll('.nvui-tab')].forEach((b, i) => b.addEventListener('click', () => userTab(TABS[i][0])));
-    panel.bottomNav && [...panel.bottomNav.querySelectorAll('.nvui-bottom-nav-item')].forEach((b, i) => b.addEventListener('click', () => userTab(TABS[i][0])));
+    const prepTab = key => {
+      if (key === 'ai') {
+        S.ai.scope = S.checked.size && S.ai.scope === 'cur' ? 'sel' : !S.checked.size && S.ai.scope === 'sel' ? 'cur' : S.ai.scope;
+        $('[name=scope]', root).val(S.ai.scope);
+      }
+    };
+    const onNavGuard = ev => {
+      const key = navKeyOf(ev);
+      if (!key || key === S.tab) return;
+      if (!guard()) { ev.preventDefault(); ev.stopImmediatePropagation(); panel.setTab(S.tab); return; }
+      setDirty(false);
+      prepTab(key);
+      S.tab = key;
+    };
+    panel.tabs && panel.tabs.addEventListener('click', onNavGuard, true);
+    panel.bottomNav && panel.bottomNav.addEventListener('click', onNavGuard, true);
+    const onNavKey = ev => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(ev.key)) return;
+      if (!guard()) { ev.preventDefault(); ev.stopImmediatePropagation(); panel.setTab(S.tab); return; }
+      setDirty(false);
+      setTimeout(syncActiveTab, 0);
+    };
+    panel.tabs && panel.tabs.addEventListener('keydown', onNavKey, true);
 
     // —— 未保存守卫：捕获阶段拦截 Esc / 点遮罩 / 关闭按钮（createPanel 的内建关闭在前） ——
     capKey = ev => {
@@ -1579,7 +1449,7 @@ ${GUIDE}
       if (this.classList.contains('wbe-chipin')) return;
       setDirty(true); updTok();
     });
-    let qt; root.on('input', '#wbe-q', function () { const v = this.value; clearTimeout(qt); qt = setTimeout(() => { S.q = v; S.limit = 300; renderList(); }, 120); });
+    root.on('input', '#wbe-q', function () { const v = this.value; clearTimeout(qTimer); qTimer = setTimeout(() => { S.q = v; S.limit = 300; renderList(); }, 120); });
     root.on('change', '#wbe-flt,#wbe-sort,#wbe-gflt', function () {
       if (isRendering) return;
       if (this.id === 'wbe-gflt') {
@@ -1612,56 +1482,24 @@ ${GUIDE}
     });
 
     render();
-    renderTab('ai'); renderTab('tool'); renderTab('set');
-    S.tab = 'entries';
+    renderAI();
+    refreshTool();
+    S.tab = panel.activeTab || 'entries';
+    syncActiveTab();
   }
 
   let isOpenLoading = false;
-  // ---------- 置顶：面板必须压过酒馆主界面（移动端聊天列 / 其它扩展浮层） ----------
-  // 面板层级通过 CSS 与内联样式固定最高 z-index（2147483647），避免被酒馆元素遮挡。
-  // 注意：严禁在已打开状态下调用 dlg.close()+dlg.show() 或定时器反复重开，否则会导致界面剧烈闪烁跳动。
-  const ZMAX = '2147483647';
-  function raisePanel() {
-    if (!panel) return;
-    const dlg = panel.dialog, ov = panel.overlay;
-    try {
-      if (!dlg.open) {
-        try { dlg.show(); } catch { dlg.setAttribute('open', ''); }
-      }
-      dlg.style.zIndex = ZMAX;
-      if (ov) ov.style.zIndex = ZMAX;
-      const p = panel.panel;
-      if (p) p.style.zIndex = ZMAX;
-    } catch { /* 忽略 */ }
-  }
-  // 遮挡自检：面板中心点最上层的元素是否属于面板自身；不是则说明仍被酒馆元素压住
-  function checkOccluded() {
-    try {
-      if (!panel || panel.overlay.hidden) return null;
-      const p = panel.panel;
-      if (!p) return null;
-      const r = p.getBoundingClientRect();
-      if (!r.width || !r.height) return null;
-      const hit = D.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      if (!hit) return null;
-      if (p.contains(hit) || dlgContains(hit)) return null;
-      const info = { tag: hit.tagName, id: hit.id || '', cls: (hit.className && hit.className.baseVal !== undefined ? hit.className.baseVal : String(hit.className || '')).slice(0, 120) };
-      console.warn('[WBE] 面板仍被遮挡，遮挡元素：', info, hit);
-      return info;
-    } catch (err) { return null; }
-  }
-  function dlgContains(el) { try { return panel && panel.dialog.contains(el); } catch { return false; } }
 
   async function open() {
-    try { await build(); } catch (err) { console.error(err); return toastr.error('界面加载失败：' + (err.message || err)); }
+    try { await build(); } catch (err) {
+      console.error(err);
+      return toast.error('界面加载失败：' + (err.message || err));
+    }
     $('#wbe-md', root).removeClass('show-edit');
     panel.open();
     panel.syncIndicator();
-    raisePanel();
-    setTimeout(() => {
-      const bad = checkOccluded();
-      if (bad) console.warn('[WBE] 顶栏层级异常，遮挡元素：', bad);
-    }, 500);
+    syncActiveTab();
+    setTimeout(syncActiveTab, 0);
     if (isOpenLoading) return;
     isOpenLoading = true;
     try {
@@ -1674,38 +1512,28 @@ ${GUIDE}
     }
   }
 
-  let attachItv = null, attachTimeout = null;
-  // ---------- 清理（重复启用脚本 / 页面卸载时） ----------
-  W.__wbeOpen = open;
-  W.__wbeRaise = () => { raisePanel(); return checkOccluded() || '已提升到最上层'; };
-  W.__wbeTeardown = () => {
+  // ---------- 生命周期：自身监听/定时器/拖拽全部可回收 ----------
+  let cleaned = false;
+  function cleanupOwn() {
+    if (cleaned) return;
+    cleaned = true;
     $(D).off('keydown.wbe');
-    if (capKey) D.removeEventListener('keydown', capKey, true);
-    if (capClick && panel) panel.dialog.removeEventListener('click', capClick, true);
-    if (attachItv) clearInterval(attachItv);
-    if (attachTimeout) clearTimeout(attachTimeout);
-    if (tokTimer) clearTimeout(tokTimer);
-    if (probeTimer) clearTimeout(probeTimer);
-    try { panel && typeof panel.destroy === 'function' && panel.destroy(); } catch { /* 忽略 */ }
-    $('#wbe-root,#wbe-layer,#wbe-style,#wbe-menu', D).remove();
-    W.__wbeTeardown = null;
-    W.__wbeOpen = null;
-  };
+    if (capKey) { D.removeEventListener('keydown', capKey, true); capKey = null; }
+    if (capClick && panel) { panel.dialog.removeEventListener('click', capClick, true); capClick = null; }
+    if (qTimer) { clearTimeout(qTimer); qTimer = null; }
+    if (tokTimer) { clearTimeout(tokTimer); tokTimer = null; }
+    if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
+    if (dragCleanup) { try { dragCleanup(); } catch { /* 忽略 */ } dragCleanup = null; }
+    if (root) { try { root.off(); } catch { /* 忽略 */ } }
+  }
 
-  function attachMenu() {
-    if (D.getElementById('wbe-menu')) return true;
-    const menu = $('#extensionsMenu', D);
-    if (menu.length) {
-      $('<div id="wbe-menu" class="list-group-item flex-container flexGap5"><div class="fa-solid fa-book-open extensionsMenuExtensionButton"></div>世界书编辑器</div>', D)
-        .on('click', open).appendTo(menu);
-      return true;
-    }
-    return false;
+  function teardown() {
+    const p = panel;
+    cleanupOwn();
+    try { p && typeof p.destroy === 'function' && p.destroy(); } catch { /* 忽略 */ }
+    $('#wbe-root,#wbe-layer,#wbe-style', D).remove();
+    panel = null; root = null; closeBtnEl = null; built = false; cleaned = false;
   }
-  if (!attachMenu()) {
-    attachItv = setInterval(() => { if (attachMenu()) { clearInterval(attachItv); attachItv = null; } }, 1000);
-    attachTimeout = setTimeout(() => { if (attachItv) clearInterval(attachItv); }, 30000);
-  }
-  try { eventOnButton('世界书编辑器', open); } catch { /* 当前版本没有脚本按钮事件时忽略 */ }
-  $(window).on('pagehide', () => { W.__wbeTeardown && W.__wbeTeardown(); });
-})();
+
+  return { open, destroy: teardown };
+}

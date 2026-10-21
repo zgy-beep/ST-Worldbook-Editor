@@ -1,61 +1,194 @@
 # SillyTavern 世界书编辑器 (ST-Worldbook-Editor)
 
-基于 [SillyTavern NVUI Kit v2.2.0「Flat Glass」](https://github.com/zgy-beep/ui-kit) 设计规范打造的高颜值、现代化的酒馆世界书（Lorebook / Worldbook）全功能编辑器。
+基于 **SillyTavern NVUI Kit v2.5.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
 
-作为酒馆助手（Tavern Helper / JS-Slash-Runner）单文件脚本运行，无需修改酒馆本体源码，开箱即用。
+本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
----
+当前版本：`0.6.0`。
 
-## 🌟 核心特性
-
-- **现代扁平玻璃美学**：遵循 NVUI Kit v2.2.0 设计标准，采用 Top-Layer 原生 `<dialog>` 顶层渲染与纯 CSS 毛玻璃质感，永不被酒馆主界面遮挡，动效丝滑跟手。
-- **全生命周期条目管理**：
-  - 增删改查、双向绑定实时预览与字数/Token 估算（集成中文分词防抖）。
-  - 支持常驻（Constant）、选择性触发（Selective）、向量检索（Vectorized）等原生机制。
-  - 支持拖拽排序（平滑更新 `displayIndex`）、批量多选、批量启用/禁用、批量调整触发概率等高效率操作。
-- **双向数据兼容层**：
-  - 全面兼容 SillyTavern 原生条目结构（`disable`, `constant`, `vectorized`, `selective` 及数值型 `position: 0~6`）。
-  - 与现代语义策略双向无缝映射，读写无损同步，彻底消除条目状态误判与丢失问题。
-- **全方位安全加固**：
-  - **XSS 深度免疫**：所有动态插入的条目名称、关键词、扩展属性与 AI 推荐项均执行严格的 HTML 属性/实体转义。
-  - **ReDoS 灾难性回溯防护**：关键词正则触发机制内置嵌套高危量词拦截，杜绝恶意或异常正则冻结主线程。
-  - **原子级撤销与数据防脏**：撤销机制采用集合差集精准增量同步；AI 批量建议与局部建议强制绑定原世界书会话 ID，避免跨书误覆写。
-  - **路径穿越防御**：新建世界书与导入导出严格过滤非安全路径字符。
-- **世界书深度体检与诊断**：
-  - 孤岛设定检测（内容中未提及其他条目且未被其他条目引用的潜在脱节设定）。
-  - 关键词重叠/冲突扫描。
-  - 全书触发实时仿真测试（输入模拟对话文本，即时查看激活条目与命中关键词）。
-- **AI 智能赋能与 Diff 预览**：
-  - 支持针对选中条目或整本世界书执行 AI 扩写、重写、润色与拆分整理。
-  - 内置高性能 Diff 差异对比算法（带矩阵规模安全保护），清晰对比修改前后差异并支持一键应用。
+> 当前仓库仍处于本地修改阶段，尚未推送到公开仓库。扩展目录结构已经符合标准扩展规范；发布后即可直接通过扩展管理器的 Git URL 安装。在未发布前，请使用下方「本地安装」方式。
 
 ---
 
-## 🚀 安装与使用
+## 功能特性
 
-### 安装步骤
-
-1. 在 SillyTavern 中安装并启用 **酒馆助手（Tavern Helper / JS-Slash-Runner）** 扩展。
-2. 打开 **酒馆助手** → 点击 **脚本库** → 点击 **新建脚本**。
-3. 将本项目中的 [`Worldbook-Editor.js`](Worldbook-Editor.js) 全文复制并粘贴到脚本内容中。
-4. 勾选 **启用脚本** 并保存。
-
-### 打开方式
-
-- **魔法棒菜单**：点击酒馆顶栏或消息输入框旁的魔法棒图标（扩展菜单），在列表中点击 **「世界书编辑器」**。
-- **助手按钮**：在酒馆助手中为该脚本创建快速触发按钮。
-- **控制台调用**：随时在浏览器开发者控制台执行 `window.__wbeOpen()` 呼出面板。
+- **NVUI Kit v2.5.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
+- **世界书条目全生命周期管理**：新建、删除、编辑、实时预览、字数与 Token 估算；支持常驻、选择性触发、向量化等条目机制。
+- **批量操作**：多选、批量启用/禁用、批量分组、调整顺序、深度与触发概率。
+- **双向数据兼容**：兼容 SillyTavern 原生条目的 `disable`、`constant`、`selective`、`vectorized`、数值型 `position`，并在需要时映射到新的 `strategy` / `position` 结构。
+- **拖拽排序**：通过 `displayIndex` / `display_index` 与 `order` 维护条目顺序。
+- **世界书体检**：孤岛设定、关键词重叠、触发仿真、潜在冲突扫描。
+- **AI 辅助**：对选中条目或整本世界书执行扩写、重写、润色、拆分与冲突检查；结果先进入 Diff 预览，不会自动写入。
+- **安全加固**：动态内容转义、危险正则拦截、AI 结果与来源世界书绑定、路径穿越过滤、保存互斥与撤销。
+- **本地化运行时**：Kit、样式、提示词拼装与解析模块均为扩展本地文件，无需额外网络请求。
 
 ---
 
-## 🛠️ 技术栈与依赖
+## 安装
 
-- **宿主环境**：[SillyTavern](https://github.com/SillyTavern/SillyTavern) + TavernHelper API
-- **UI 规范**：[NVUI Kit v2.2.0](https://github.com/zgy-beep/ui-kit)
-- **图标体系**：FontAwesome 6.x
+### 前置依赖
+
+请先在 SillyTavern 中安装并启用 **酒馆助手（Tavern Helper / JS-Slash-Runner）**。
+
+本扩展通过运行时读取 `window.TavernHelper` 检查酒馆助手是否可用，不依赖固定安装目录名，因此酒馆助手文件夹改名不会导致本扩展失效。若未检测到酒馆助手，扩展会给出提示，而不会在未说明的情况下静默失败。
+
+### 方式一：扩展管理器安装（仓库发布后）
+
+1. 打开 SillyTavern，进入 **扩展 / Extensions**。
+2. 点击 **Install Extension**。
+3. 填入本仓库的 Git URL，确认安装。
+4. 刷新页面，在扩展列表中确认「世界书编辑器」已启用。
+
+扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `index.js` 与 `style.css`。
+
+### 方式二：当前本地安装（仓库尚未推送）
+
+1. 将整个 `ST-Worldbook-Editor` 目录放入 SillyTavern 的第三方扩展目录，例如：
+   - `public/scripts/extensions/third-party/ST-Worldbook-Editor/`，或
+   - 用户数据目录下对应的 `extensions/` 目录。
+2. 刷新 SillyTavern 页面。
+3. 在 **扩展** 列表中确认「世界书编辑器」已加载。
+
+### 从旧版单文件脚本迁移
+
+如果之前把 `Worldbook-Editor.js` 全文粘贴在酒馆助手的脚本库中运行：
+
+1. **停用或删除酒馆助手中的旧脚本**，避免出现两个菜单入口或重复面板。
+2. 安装并启用本扩展后刷新页面。
+3. 首次读取设置时，扩展会自动把旧的 `localStorage` 键 `wbe_settings_v1` 迁移到 SillyTavern 的扩展设置；已有 ST 设置优先，旧设置中的未知字段会保留。
 
 ---
 
-## 📄 开源许可
+## 使用
 
-本项目遵循 MIT 许可证。
+- **扩展菜单**：点击酒馆输入框旁的魔法棒/扩展菜单，选择 **世界书编辑器**。
+- **控制台入口**：在浏览器开发者控制台执行 `__wbeOpen()`。该入口在扩展停用后会被清理。
+- **AI 应用流程**：生成结果先显示 Diff；只有点击应用后才会写回世界书。
+
+---
+
+## 设置与存储
+
+扩展设置保存在 SillyTavern 的 `extensionSettings` 中，命名空间为：
+
+```text
+st_worldbook_editor
+```
+
+业务字段与原单文件脚本的 CFG 兼容：
+
+| 字段 | 说明 |
+| :--- | :--- |
+| `mode` | `st` 使用酒馆当前连接；`custom` 使用自定义接口 |
+| `apiurl` / `key` / `model` | 自定义接口信息 |
+| `temp` / `maxTokens` | 生成参数 |
+| `style` | 统一的设定与文风要求 |
+| `presets` | 用户保存的指令预设 |
+| `sort` / `flt` / `groupFlt` / `tpl` | 列表排序、筛选与新建模板 |
+| `jailbreak` | 用户自填的破限提示词字段，默认空字符串 |
+
+面板布局不混入业务字段，单独保存在同一命名空间的 `layout` 对象中，由 NVUI Kit 的 StorageAdapter 读写。
+
+### 设置迁移
+
+- 首次读取时检查旧键 `wbe_settings_v1`。
+- 迁移遵循「已有 ST 设置优先」：同名业务字段以 ST 设置为准，旧设置只补空缺。
+- 迁移不会删除 ST 设置中已有的未知字段，也会保留旧设置中未被识别的字段。
+- 只写入 `st_worldbook_editor` 自身命名空间，不修改其它扩展的设置。
+- 写入成功后清理旧键，避免重复迁移。
+
+### 重置
+
+运行时提供 `resetSettings()`，只清空本扩展自己的命名空间及旧键 `wbe_settings_v1`：
+
+- 不调用 `localStorage.clear()`；
+- 不删除其它扩展的设置；
+- 不遍历、不删除任意其它 `wbe_*` 键。
+
+### API Key 提示
+
+若使用自定义接口并在 `key` 中填写密钥，该值会以明文形式保存在 SillyTavern 的扩展设置（服务器端设置文件）中。请勿在公共设备或共享实例上保存敏感密钥。
+
+---
+
+## 关于 AI 与破限字段
+
+AI 页在修改指令之后提供「破限提示词（可选）」输入框，对应 `jailbreak` 字段，默认留空。
+
+用户填写的内容会在任务之后、输出格式要求之前追加到每次 AI 请求，适用于批量生成、关键词推荐、位置推荐、冲突检查和局部润色。留空时不追加。局部润色保留纯文本输出；结构化任务会提取有效 JSON，过滤模型思考块，并在格式错误时自动重试一次。
+
+AI 生成结果不会直接写入世界书，必须由用户在 Diff 预览中确认后应用。
+
+---
+
+## 目录结构
+
+```text
+ST-Worldbook-Editor/
+├─ manifest.json          # 标准扩展清单：入口、样式、最低 ST 版本、生命周期钩子
+├─ index.js               # ES Module 入口：APP_READY 启动、菜单、依赖检查、清理
+├─ runtime.js             # createRuntime：设置、迁移、布局存储、TavernHelper 访问
+├─ Worldbook-Editor.js    # 编辑器业务与界面，导出 initializeEditor(runtime)
+├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
+├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
+├─ style.css              # 扩展样式，导入本地 tokens/components
+└─ ui-kit/                # NVUI Kit v2.5.0 本地运行时与样式资产
+```
+
+### 运行时接口
+
+`runtime.js` 导出 `createRuntime(options)`，返回：
+
+```js
+{
+  getSettings(),   // 实时读取 extensionSettings，首次使用时初始化/迁移
+  saveSettings(),  // 调用宿主 saveSettingsDebounced
+  getHelper(),     // 实时读取 window.TavernHelper，未检测到返回 null；不缓存、不硬编码安装目录
+  layoutStorage,   // { get(key), set(key, value), remove(key) }
+  NVUI,            // 本地 NVUI Kit 2.5.0 实例
+  resetSettings(), // 只清本扩展命名空间与旧 wbe_settings_v1
+}
+```
+
+`layoutStorage` 已按 NVUI Kit 源码核对：Kit 内部持久化使用 `get` / `set`，清理时使用 `delete`（缺失时回退 `set(key, null)`）。本实现对外暴露契约要求的 `remove`，同时提供不可枚举的 `delete` 别名，且 `set(key, null)` 也会执行删除。
+
+`Worldbook-Editor.js` 由 `index.js` 以 `initializeEditor(runtime)` 方式导入并调用，返回 `{ open, destroy }`；它不再自行执行 IIFE，也不自行挂载扩展菜单。
+
+---
+
+## 兼容性
+
+- 最低 SillyTavern 客户端版本：`1.17.0`（`manifest.json` 的 `minimum_client_version`）。`activate` / `disable` 等 manifest 生命周期钩子从 1.17.0 开始提供，与本文使用的生命周期一致。
+- 生命周期使用标准扩展钩子：`activate` → `init`，`disable` → `onDisable`。
+- 启动等待 `APP_READY`；如果扩展在 `APP_READY` 之后才加载，事件源会补发该事件。清理后再次初始化可重新创建菜单与面板。
+- NVUI Kit：`2.5.0`，随扩展本地提供。
+- 不新增网络 CDN 依赖。
+- 酒馆助手不是 `manifest.dependencies` 中的硬编码扩展目录依赖：本扩展在运行时检查 `window.TavernHelper`，避免酒馆助手安装目录改名后失效。
+
+---
+
+## 开发与测试
+
+项目测试由维护者在本地运行：
+
+```bash
+npm test
+```
+
+浏览器冒烟测试需要本地 Playwright 与 SillyTavern 静态资源：
+
+```bash
+npm run test:browser
+```
+
+可通过 `PLAYWRIGHT_MODULE_PATH` 指定已安装的 `playwright` 或 `playwright-core`，通过 `CHROME_PATH` 指定 Chrome 可执行文件，通过 `ST_PUBLIC_DIR` 指定 SillyTavern 的 `public` 目录。测试在隔离的本地页面中模拟宿主与酒馆助手，不调用真实模型或读写现有世界书。
+
+Kit 规范守护测试：`npm run test:kit`。
+
+测试覆盖标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、桌面/移动端布局、宿主模态让位、布局持久化与停用/重新启用生命周期。
+
+---
+
+## 许可证
+
+MIT。
