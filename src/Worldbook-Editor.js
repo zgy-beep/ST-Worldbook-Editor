@@ -557,7 +557,7 @@ ${GUIDE}
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
     return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.6.0</span></div>
-      <div class="nvui-acc is-open">
+      <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <div class="wbe-bar">${modeBtn('st')}${modeBtn('custom')}</div>
@@ -569,7 +569,7 @@ ${GUIDE}
           <div class="wbe-bar"><button type="button" class="nvui-btn is-ghost" data-a="setmodels">拉取模型列表</button><button type="button" class="nvui-btn is-secondary" data-a="settest">测试连接</button><span id="wbe-setmsg" class="nvui-hint"></span></div>
         </div></div>
       </div>
-      <div class="nvui-acc is-open">
+      <div class="nvui-acc is-open" id="wbe-acc-style">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${String(c.style || '').trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style || '')}</textarea></label>
@@ -597,7 +597,7 @@ ${GUIDE}
     const t = S.tool;
     const tgl = (k, l, on) => `<button type="button" class="nvui-btn is-sm${on ? ' is-secondary' : ''}" data-a="ttgl" data-k="${k}" aria-pressed="${on}">${l}</button>`;
     return `<div class="wbe-accs">
-      <div class="nvui-acc is-open">
+      <div class="nvui-acc is-open" id="wbe-acc-find">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-magnifying-glass')}全书查找替换</span><span class="nvui-acc-summary" id="wbe-tsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <div class="wbe-grid2">${field('查找', `<input class="nvui-input" name="t_find" value="${esc(t.find)}" placeholder="例如：旧角色名">`)}${field('替换为', `<input class="nvui-input" name="t_rep" value="${esc(t.rep)}">`)}</div>
@@ -605,7 +605,7 @@ ${GUIDE}
           <div class="wbe-bar"><button type="button" class="nvui-btn is-ghost" data-a="tfind">预览命中</button><button type="button" class="nvui-btn is-primary" data-a="treplace">全部替换</button><span id="wbe-tmsg" class="nvui-hint"></span></div>
         </div></div>
       </div>
-      <div class="nvui-acc is-open">
+      <div class="nvui-acc is-open" id="wbe-acc-probe">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-vial')}触发测试</span><span class="nvui-acc-summary" id="wbe-ptsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           ${field('聊天文本', `<textarea class="nvui-input wbe-probe" name="probe" placeholder="粘贴一段聊天文本，看会触发哪些条目">${esc(t.probe)}</textarea>`)}
@@ -613,7 +613,7 @@ ${GUIDE}
           <p class="nvui-hint">只按常驻和主关键词判断，不含次要关键词、递归、概率。</p>
         </div></div>
       </div>
-      <div class="nvui-acc is-open">
+      <div class="nvui-acc is-open" id="wbe-acc-health">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-stethoscope')}世界书体检与一致性审查</span><span class="nvui-acc-summary" id="wbe-hsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <div id="wbe-health"></div>
@@ -995,6 +995,47 @@ ${GUIDE}
     list.querySelectorAll('.wbe-row.on').forEach(r => r.classList.remove('on'));
     const newRow = list.querySelector(`.wbe-row[data-uid="${uid}"]`);
     if (newRow) newRow.classList.add('on');
+  }
+  /**
+   * 折叠条开合状态持久化。
+   *
+   * Kit 的 persist.accordion 只覆盖「经 panel.addAccordion() / addNode() 注册」的折叠条 ——
+   * 那条路径要求节点带 Kit 工厂产出的 setOpen 方法。而我们的折叠条是业务 HTML 字符串
+   * 经 innerHTML 注入的纯 DOM，绕过了注册机制，于是 Kit 存下来的 accordion 状态是空对象，
+   * 折叠状态永远记不住（实测 layout 里 accordion: {}）。
+   *
+   * 这里自行持久化到扩展设置的 layout 命名空间，键名与 Kit 的 nvui_state_* 互不干扰。
+   */
+  const ACC_STATE_KEY = 'wbe_acc_state';
+  function saveAccState() {
+    const state = {};
+    root.find('.nvui-acc').each(function () {
+      const id = this.id;
+      if (!id) return;
+      state[id] = this.classList.contains('is-open');
+    });
+    try {
+      runtime.layoutStorage.set(ACC_STATE_KEY, state);
+    } catch (err) {
+      console.warn('[ST-Worldbook-Editor] 保存折叠条状态失败', err);
+    }
+  }
+  function restoreAccState() {
+    let state = null;
+    try {
+      state = runtime.layoutStorage.get(ACC_STATE_KEY);
+    } catch (err) {
+      console.warn('[ST-Worldbook-Editor] 读取折叠条状态失败', err);
+      return;
+    }
+    if (!state || typeof state !== 'object') return;
+    root.find('.nvui-acc').each(function () {
+      const id = this.id;
+      if (!id || typeof state[id] !== 'boolean') return;
+      this.classList.toggle('is-open', state[id]);
+      const head = this.querySelector('.nvui-acc-head');
+      if (head) head.setAttribute('aria-expanded', String(state[id]));
+    });
   }
   /**
    * 把编辑区顶部（标题栏）带入 Kit 唯一滚动层的可视区。
@@ -1395,6 +1436,8 @@ ${GUIDE}
     $('#wbe-pane-ai', panel.body).html(`<div id="wbe-ai" class="wbe-fai wbe-page">${aiHTML()}</div>`);
     $('#wbe-pane-tool', panel.body).html(`<div id="wbe-tool" class="wbe-ftool wbe-page">${toolHTML()}</div>`);
     $('#wbe-pane-set', panel.body).html(`<div id="wbe-set" class="wbe-fset wbe-page">${setHTML()}</div>`);
+    // 恢复上次会话的折叠条开合状态（Kit 的 persist.accordion 覆盖不到 innerHTML 注入的折叠条）
+    restoreAccState();
 
     // —— 顶部 tabs / 手机底部导航共享同一份状态；Kit 负责切换显示，这里只做未保存守卫与状态镜像 ——
     const navKeyOf = ev => {
@@ -1442,6 +1485,7 @@ ${GUIDE}
     root.on('click', '.nvui-acc-head', function () {
       const open = $(this).closest('.nvui-acc').toggleClass('is-open').hasClass('is-open');
       $(this).attr('aria-expanded', String(open));
+      saveAccState();
     });
     root.on('click', '.wbe-chk', function (ev) {
       ev.stopPropagation();

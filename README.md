@@ -174,7 +174,32 @@ Kit 的 `.nvui-input` 是裸类选择器（特异性 0,1,0），赢不过宿主�
 只恢复 Kit 组件自己的 token 取值，浅色 / 深色主题自动跟随。
 
 > **上游跟进**：NVUI Kit 的「§8 SillyTavern 宿主兼容红线」目前只隔离了 checkbox，
-> 未覆盖 `input` / `select` / `textarea`。已向上游提交 issue 请求根治。
+> 未覆盖 `input` / `select` / `textarea`，且 kit 没有 `select option` 的皮肤。
+> 已向上游提交 issue 请求根治：
+> [zgy-beep/ui-kit#9 — 宿主主题以 !important 重写全局表单控件，导致 kit 表单组件失去 token 配色](https://github.com/zgy-beep/ui-kit/issues/9)
+
+### 折叠条开合状态持久化
+
+Kit 的 `persist.accordion` 只覆盖「经 `panel.addAccordion()` / `addNode()` 注册」的折叠条 ——
+那条路径要求节点带 Kit 工厂产出的 `setOpen` 方法。而本扩展的折叠条是业务 HTML 字符串
+经 `innerHTML` 注入的纯 DOM，绕过了注册机制，实测 Kit 存下来的 `accordion` 状态是**空对象**。
+
+因此本扩展自行持久化到扩展设置的 `layout` 命名空间（键 `wbe_acc_state`，与 Kit 的
+`nvui_state_*` 互不干扰）：折叠条带稳定 id，点击时写入，面板重建时恢复。
+
+> **上游跟进**：已请求 Kit 暴露公开的折叠条注册 API，让「插件自行注入面板内容」这一主流用法
+> 也能享受 Kit 的持久化能力：
+> [zgy-beep/ui-kit#11 — accordion 折叠状态只对经 addAccordion/addNode 注册的组件生效](https://github.com/zgy-beep/ui-kit/issues/11)
+
+### 批量选择复选框
+
+NVUI Kit 目前只有「胶囊开关」（`.nvui-switch-row`），**没有独立的小方块 checkbox 组件**。
+本扩展的 `.wbe-chk` 是业务侧自绘：沿用 Kit 的令牌与「宿主 checkbox 必须隔离」的思路
+（`appearance:none` + 显式尺寸 + 压掉宿主 `::before` 对勾）。
+
+> **上游跟进**：已请求 Kit 补齐标准 checkbox 组件，避免每个下游插件重复实现：
+> [zgy-beep/ui-kit#10 — 没有独立的 checkbox 组件](https://github.com/zgy-beep/ui-kit/issues/10)
+
 
 ### 运行时接口
 
