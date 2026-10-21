@@ -996,15 +996,45 @@ ${GUIDE}
     const newRow = list.querySelector(`.wbe-row[data-uid="${uid}"]`);
     if (newRow) newRow.classList.add('on');
   }
+  /**
+   * 把编辑区顶部（标题栏）带入 Kit 唯一滚动层的可视区。
+   *
+   * 为什么不用 scrollIntoView：
+   *   scrollIntoView 会滚动所有可滚动祖先。列表与编辑区共享 .nvui-panel-body
+   *   这一个滚动层，它一旦被拉走，左侧列表会跟着一起跳动（实测 Δ -768px），
+   *   用户刚点的那一行直接被滚出视野；而且被对齐的是内容区 #wbe-ebody，
+   *   标题栏 #wbe-ebar 反而落到可视区之外。
+   *
+   * 这里改为：只操作 Kit 的唯一滚动层 .nvui-panel-body，按「最小必要位移」计算，
+   * 且只在单栏（移动端列表被隐藏）模式下生效 —— 桌面双栏下两栏并排可见，
+   * 完全不需要滚动，滚动反而会把列表带走。
+   */
+  function revealEditTop() {
+    const body = panel && panel.body;
+    const bar = $('#wbe-ebar', root)[0];
+    const listEl = $('#wbe-list', root)[0];
+    if (!body || !bar || !listEl) return;
+    // 桌面双栏：编辑区与列表并排显示，不做任何滚动
+    if (getComputedStyle(listEl).display !== 'none') return;
+
+    const barRect = bar.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    if (barRect.top < bodyRect.top) {
+      // 标题栏整体在可视区上方：让内容下移，把它顶到容器顶部（最小位移）
+      body.scrollTop += barRect.top - bodyRect.top;
+    } else if (barRect.bottom > bodyRect.bottom) {
+      // 标题栏被容器下沿裁掉：让内容上移，把它底推进可视区（最小位移）
+      body.scrollTop += barRect.bottom - bodyRect.bottom;
+    }
+  }
   function select(uid) {
     if (uid !== S.sel && !guard()) return;
     S.sel = uid; S.dirty = false;
     $('#wbe-md', root).addClass('show-edit');
     updateRowSelection(uid);
     renderEditor();
-    // 单滚动层：选中后只把编辑区带入可视范围，不再操作列表内部 scrollTop
-    const eb = $('#wbe-ebody', root)[0];
-    if (eb) eb.scrollIntoView({ block: 'nearest' });
+    // 单滚动层：只在单栏模式下把编辑区标题栏带入可视范围；桌面双栏不滚，避免列表跳动
+    revealEditTop();
   }
   function addChips(box, text) {
     const have = new Set($('.nvui-chip', box).map((_, c) => $(c).attr('data-k')).get());
@@ -1019,8 +1049,8 @@ ${GUIDE}
     updateRowSelection(uid);
     renderEditor();
     activateTab('entries');
-    const eb = $('#wbe-ebody', root)[0];
-    if (eb) eb.scrollIntoView({ block: 'nearest' });
+    // 同 select：只在单栏模式下把编辑区标题栏带入可视范围
+    revealEditTop();
   };
   const actions = {
     close() { if (guard()) { setDirty(false); panel.close(); } },
