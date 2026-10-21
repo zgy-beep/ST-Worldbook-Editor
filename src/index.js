@@ -141,7 +141,7 @@ async function ensureNVUI() {
     let loaded = null;
 
     try {
-      await import('./ui-kit/nvui-api.js');
+      await import('../ui-kit/nvui-api.js');
       loaded = getGlobalNVUI();
     } catch (err) {
       console.error('[ST-Worldbook-Editor] 本地 NVUI Kit 加载失败', err);
