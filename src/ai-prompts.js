@@ -17,8 +17,18 @@ function textValue(value) {
 /**
  * 拼装酒馆助手 ordered_prompts 消息数组。
  *
- * 顺序固定为：任务 system（含 style）→ 任务 user → 自定义 jailbreak user
- * → 输出契约 system → （json 且 retry 时）强化 JSON 提醒 system。
+ * 顺序固定为：自定义 jailbreak system（最上部）→ 任务 system（含 style）
+ * → 任务 user → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
+ *
+ * 为什么 jailbreak 放最上部而不是任务之后：
+ *   它是「全局框架声明」（例如要求不受题材保守倾向束缚、保持特定叙事尺度），
+ *   作用对象是整个请求，而不是某一次具体任务。
+ *   - 放在任务之后时，模型会把它读成「对刚才那个任务的补充要求」，
+ *     与任务指令冲突时会反过来压制任务；
+ *   - 夹在任务 user 与输出契约之间，正好落在长上下文的低注意力中段；
+ *   - 用 role:'user' 下达框架声明，权重天然低于 system。
+ *   输出契约仍留在最后压轴（recency 效应保证格式），两者一头一尾互相兜底。
+ *
  * 不内置任何破限文案；jailbreak 为空时不会生成额外消息。
  * format='text' 时只要求正文，且不追加 JSON 重试提醒。
  *
@@ -34,13 +44,13 @@ export function buildMessages({ system, user, style = '', jailbreak = '', retry 
   }
 
   const styleText = textValue(style);
-  const messages = [
-    { role: 'system', content: styleText ? system + STYLE_LABEL + styleText : system },
-    { role: 'user', content: user },
-  ];
+  const messages = [];
 
-  const jailbreakText = typeof jailbreak === 'string' ? jailbreak : '';
-  if (jailbreakText.trim()) messages.push({ role: 'user', content: jailbreakText });
+  const jailbreakText = typeof jailbreak === 'string' ? jailbreak.trim() : '';
+  if (jailbreakText) messages.push({ role: 'system', content: jailbreakText });
+
+  messages.push({ role: 'system', content: styleText ? system + STYLE_LABEL + styleText : system });
+  messages.push({ role: 'user', content: user });
 
   const isText = format === 'text';
   messages.push({ role: 'system', content: isText ? TEXT_OUTPUT_CONTRACT : JSON_OUTPUT_CONTRACT });
