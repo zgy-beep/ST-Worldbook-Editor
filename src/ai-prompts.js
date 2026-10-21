@@ -12,8 +12,8 @@ const STYLE_LABEL = '\n\n【创作者的统一设定与文风要求】\n';
 
 /** 前置区允许的 role —— 多数 API 拒绝首条非 user/system，故不允许 assistant。 */
 const PRE_ROLES = new Set(['system', 'user']);
-/** 后置区允许的 role。assistant（预填充）暂未放开，见 README 的路线说明。 */
-const POST_ROLES = new Set(['system', 'user']);
+/** 后置区允许的 role。assistant 会作为「预填充」被移到整条请求的最后。 */
+const POST_ROLES = new Set(['system', 'user', 'assistant']);
 
 function textValue(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -53,11 +53,23 @@ function normalizeMessages(list, allowed, label) {
  *   - **前置区**设定基线。放在任务之后会被读成「对刚才那个任务的补充要求」，
  *     与任务指令冲突时反而压制任务；用 role:'user' 下达则权重低于 system。
  *   - **后置区**在临近输出位置再锚一次，对抗中段衰减。
- *   - **输出契约必须留在最后压轴**：它是格式硬约束，排在它后面的任何指令
- *     都会削弱 JSON / 正文的稳定性。因此后置区永远位于契约**之前**，不能越过它。
+ *   - **输出契约必须留在最后一条「指令」的位置**：它是格式硬约束，排在它后面的任何
+ *     指令都会削弱 JSON / 正文的稳定性。因此后置区永远位于契约**之前**，不能越过它。
  *
- * role 白名单按区域区分（见 PRE_ROLES / POST_ROLES）：assistant 预填充暂时只在
- * text 格式下有意义，本版先不放开，避免污染 JSON 解析路径。
+ * role 白名单按区域区分（见 PRE_ROLES / POST_ROLES）：
+ *   - 前置区只允许 system / user —— 多数 API 拒绝首条非 user/system 的消息。
+ *   - 后置区额外允许 **assistant**，用作「预填充」（prefill）：模型会从这段文本
+ *     **续写**，而不是重新判断，是最强的约束手段。
+ *
+ * 预填充的两条硬约束（实现要点）：
+ *   1. **必须位于整条请求的最后**（Chat Completion 的 API 约束：最后一条 assistant 才是
+ *      prefill）。所以当后置区存在 assistant 时，契约与重试提醒会排在它**之前** ——
+ *      契约仍是最后一条「指令」，只是后面多了一段「已生成的回答开头」。
+ *   2. **只取最后一条 assistant**。多条 assistant 时，前面的会被降级为 system 并保留
+ *      在原来的位置（不丢用户内容），避免出现「中间夹着 assistant」这种 API 不认的结构。
+ *
+ * 调用方需要自行处理预填充前缀：`generateRaw` 返回的是**续写部分**，不含 prefill 本身。
+ * 判断方法：末尾消息 role 为 assistant 时取其 content，拼回返回值再解析。
  *
  * @param {{system: string, user: string, style?: string, pre?: Array<{role:string,content:string}>, post?: Array<{role:string,content:string}>, retry?: boolean, format?: 'json'|'text'}} params
  * @returns {Array<{role: 'system'|'user'|'assistant', content: string}>}
@@ -81,15 +93,32 @@ export function buildMessages({
   const styleText = textValue(style);
   const messages = [];
 
+  // 分离预填充：只保留**最后一条** assistant 作 prefill，其余降级为 system 并留在原位
+  // （顺序必须保持，否则用户精心排好的后置消息会被打乱）
+  const normalizedPost = normalizeMessages(post, POST_ROLES, '后置区');
+  let prefillIndex = -1;
+  for (let i = normalizedPost.length - 1; i >= 0; i -= 1) {
+    if (normalizedPost[i].role === 'assistant') { prefillIndex = i; break; }
+  }
+  const postBody = normalizedPost
+    .map((msg, i) => {
+      if (i === prefillIndex) return null;
+      return msg.role === 'assistant' ? { role: 'system', content: msg.content } : msg;
+    })
+    .filter(Boolean);
+  const prefill = prefillIndex >= 0 ? normalizedPost[prefillIndex] : null;
+
   messages.push(...normalizeMessages(pre, PRE_ROLES, '前置区'));
   messages.push({ role: 'system', content: styleText ? system + STYLE_LABEL + styleText : system });
   messages.push({ role: 'user', content: user });
-  // 后置区必须在输出契约之前：契约是压轴的格式硬约束，不能被挤到后面
-  messages.push(...normalizeMessages(post, POST_ROLES, '后置区'));
+  // 后置区（不含预填充）必须在输出契约之前
+  messages.push(...postBody);
 
   const isText = format === 'text';
   messages.push({ role: 'system', content: isText ? TEXT_OUTPUT_CONTRACT : JSON_OUTPUT_CONTRACT });
   if (!isText && retry) messages.push({ role: 'system', content: RETRY_REMINDER });
+  // 预填充必须是整条请求的最后一条
+  if (prefill) messages.push(prefill);
 
   return messages;
 }
