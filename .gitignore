@@ -6,3 +6,7 @@ Thumbs.db
 .idea/
 .workbuddy/
 .test-output/
+
+# 酒馆自定义主题等本机素材，不属于扩展运行时
+/剪贴板文本*.txt
+/剪贴板文本*.css

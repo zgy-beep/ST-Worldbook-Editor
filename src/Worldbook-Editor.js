@@ -596,7 +596,7 @@ ${GUIDE}
   function toolHTML() {
     const t = S.tool;
     const tgl = (k, l, on) => `<button type="button" class="nvui-btn is-sm${on ? ' is-secondary' : ''}" data-a="ttgl" data-k="${k}" aria-pressed="${on}">${l}</button>`;
-    return `<div class="wbe-form">
+    return `<div class="wbe-accs">
       <div class="nvui-acc is-open">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-magnifying-glass')}全书查找替换</span><span class="nvui-acc-summary" id="wbe-tsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">

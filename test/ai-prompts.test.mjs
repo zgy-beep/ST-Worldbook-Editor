@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMessages, parseAIJSON } from '../ai-prompts.js';
+import { buildMessages, parseAIJSON } from '../src/ai-prompts.js';
 
 const CONTRACT = '仅输出本次任务要求的有效JSON，不输出思考过程/说明/Markdown，保持原任务数组或对象结构';
 

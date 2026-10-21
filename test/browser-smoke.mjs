@@ -88,7 +88,7 @@ const jquery = await readFile(resolve(stPublic, 'lib/jquery-3.5.1.min.js'));
 const fixture = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/host/css/fontawesome.min.css">
-<link rel="stylesheet" href="/style.css"><style>
+<link rel="stylesheet" href="/src/styles/style.css"><style>
 html { transform: translateZ(0); } body { margin:0; font-family: sans-serif; }
 #sheld { position:absolute; inset:0; z-index:30; background:#30343b; }
 #extensionsMenu { position:relative; z-index:31; } button { font:inherit; }
@@ -133,7 +133,7 @@ window.TavernHelper = {
 localStorage.setItem('wbe_settings_v1', JSON.stringify({style:'保留原有地名',temp:0.4}));
 localStorage.setItem('wbe_other_plugin', 'preserve');
 </script><script type="module">
-window.extension = await import('/index.js');
+window.extension = await import('/src/index.js');
 for(const name of ['onActivate','init','activate']) if(typeof extension[name]==='function') { await extension[name]();break; }
 eventBus.emit('app_initialized'); eventBus.emit('app_ready');
 </script></body></html>`;

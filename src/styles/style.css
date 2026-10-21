@@ -4,15 +4,19 @@
  * 设计基底：本地 SillyTavern NVUI Kit v2.5.0。
  * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
  *
- * 约束（全文件）：
+ * 约束（本文件）：
  *   1. 只写 Kit 没有提供的业务表面；不重画 nvui- 组件皮肤；
  *   2. 所有取值走 --nvui-* 令牌，禁止颜色字面量 / emoji / 强制覆盖标记；
  *   3. 选择器全部以 #wbe-overlay 作用域开头，不污染酒馆宿主；
  *   4. 唯一滚动层是 Kit 的 .nvui-panel-body；业务子块不再设置 overflow。
+ *
+ * 宿主样式隔离放在独立文件 host-isolation.css：那里的 !important 只用于对抗
+ * 宿主主题对表单控件的全局 !important 覆盖，本文件保持零 !important。
  */
 
-@import url('./ui-kit/tokens.css');
-@import url('./ui-kit/components.css');
+@import url('../../ui-kit/tokens.css');
+@import url('../../ui-kit/components.css');
+@import url('./host-isolation.css');
 
 /* ==========================================================================
  * 1. 页与双栏条目
@@ -60,6 +64,19 @@
     display: flex;
     flex-direction: column;
     gap: var(--nvui-space-25);
+}
+
+/*
+ * 折叠条列表容器。
+ *
+ * 刻意用普通块级流而不是 flex + gap：Kit 的 .nvui-acc 自带
+ * `margin-bottom: var(--nvui-space-2)`，在 flex 容器里 gap 不会与相邻
+ * margin 折叠，两者会叠加（实测工具页 8+10=18px，而普通块级的设置页只有
+ * 8px），导致同一组件在两个页面间距不一致。这里让间距完全交给 Kit 的
+ * margin 决定，工具页与设置页一致，且 Kit 调整间距时我们自动跟随。
+ */
+#wbe-overlay .wbe-accs {
+    display: block;
 }
 
 #wbe-overlay .wbe-field {

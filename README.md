@@ -39,12 +39,12 @@
 3. 填入本仓库的 Git URL，确认安装。
 4. 刷新页面，在扩展列表中确认「世界书编辑器」已启用。
 
-扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `index.js` 与 `style.css`。
+扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `src/index.js` 与 `src/styles/style.css`。
 
-> **精简安装**：本仓库的 `main` 分支同时包含开发用的测试与文档（79 个文件，约 2.1 MB）。
+> **精简安装**：本仓库的 `main` 分支同时包含开发用的测试与文档（约 2.1 MB）。
 > 若只需要运行时，可让扩展管理器改拉 **`release` 分支** —— 该分支只保留扩展运行必需的
-> 13 个文件（约 364 KB）：`manifest.json`、7 个业务模块、`style.css`、`LICENSE`、
-> `README.md`，以及 `ui-kit/` 下的 `nvui-api.js` / `tokens.css` / `components.css`。
+> 文件（约 370 KB）：`manifest.json`、`src/` 下的 5 个业务模块与 2 个样式文件、
+> `LICENSE`、`README.md`，以及 `ui-kit/` 下的 `nvui-api.js` / `tokens.css` / `components.css`。
 > 酒馆的扩展管理器原生支持分支切换（扩展卡片上的 **Switch branch**），
 > 安装后在扩展列表点该按钮切到 `release` 即可；开发时切回 `main`。
 
@@ -132,19 +132,53 @@ AI 生成结果不会直接写入世界书，必须由用户在 Diff 预览中�
 
 ```text
 ST-Worldbook-Editor/
-├─ manifest.json          # 标准扩展清单：入口、样式、最低 ST 版本、生命周期钩子
-├─ index.js               # ES Module 入口：APP_READY 启动、菜单、依赖检查、清理
-├─ runtime.js             # createRuntime：设置、迁移、布局存储、TavernHelper 访问
-├─ Worldbook-Editor.js    # 编辑器业务与界面，导出 initializeEditor(runtime)
-├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
-├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
-├─ style.css              # 扩展样式，导入本地 tokens/components
-└─ ui-kit/                # NVUI Kit v2.5.0 本地运行时与样式资产
+├─ manifest.json              # 标准扩展清单：入口、样式、最低 ST 版本、生命周期钩子
+├─ src/
+│  ├─ index.js               # ES Module 入口：APP_READY 启动、菜单、依赖检查、清理
+│  ├─ runtime.js             # createRuntime：设置、迁移、布局存储、TavernHelper 访问
+│  ├─ Worldbook-Editor.js    # 编辑器业务与界面，导出 initializeEditor(runtime)
+│  ├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
+│  ├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
+│  └─ styles/
+│     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
+│     └─ host-isolation.css  # 宿主样式隔离层（唯一允许 !important 的文件）
+├─ ui-kit/                   # NVUI Kit v2.5.0 本地运行时与样式资产（自包含独立项目）
+└─ test/                     # 项目测试与浏览器端到端冒烟
 ```
+
+`manifest.json` 的 `js` / `css` 指向 `src/` 下的子路径 —— SillyTavern 按
+`/scripts/extensions/<扩展名>/<manifest 字段值>` 加载，支持多级相对路径。
+
+### 宿主样式隔离层
+
+`src/styles/host-isolation.css` 是全项目**唯一**允许使用 `!important` 的文件，
+职责单一：夺回宿主主题夺走的表单控件配色。
+
+某些酒馆第三方主题会用「元素选择器 + `!important`」重写全局表单控件：
+
+```css
+input[type="text"], input:not([type]), textarea:not([type="search"]) {
+  background-color: var(--ui-color-sec) !important;   /* 宿主主题色 */
+}
+select {
+  background-color: var(--ui-color-sec) !important;
+  border: 1px solid ... !important;
+}
+```
+
+Kit 的 `.nvui-input` 是裸类选择器（特异性 0,1,0），赢不过宿主的 `!important`。
+结果是面板切到浅色主题后，输入框背景仍是宿主深色，而文字颜色仍走 Kit 的
+`--nvui-text`（浅色主题下是深色），最终呈现「深底 + 深字」，完全看不清。
+
+隔离层用 `#wbe-overlay` 作用域 + `!important` 定向夺回控制权：只影响本扩展面板，
+只恢复 Kit 组件自己的 token 取值，浅色 / 深色主题自动跟随。
+
+> **上游跟进**：NVUI Kit 的「§8 SillyTavern 宿主兼容红线」目前只隔离了 checkbox，
+> 未覆盖 `input` / `select` / `textarea`。已向上游提交 issue 请求根治。
 
 ### 运行时接口
 
-`runtime.js` 导出 `createRuntime(options)`，返回：
+`src/runtime.js` 导出 `createRuntime(options)`，返回：
 
 ```js
 {
@@ -159,7 +193,7 @@ ST-Worldbook-Editor/
 
 `layoutStorage` 已按 NVUI Kit 源码核对：Kit 内部持久化使用 `get` / `set`，清理时使用 `delete`（缺失时回退 `set(key, null)`）。本实现对外暴露契约要求的 `remove`，同时提供不可枚举的 `delete` 别名，且 `set(key, null)` 也会执行删除。
 
-`Worldbook-Editor.js` 由 `index.js` 以 `initializeEditor(runtime)` 方式导入并调用，返回 `{ open, destroy }`；它不再自行执行 IIFE，也不自行挂载扩展菜单。
+`src/Worldbook-Editor.js` 由 `src/index.js` 以 `initializeEditor(runtime)` 方式导入并调用，返回 `{ open, destroy }`；它不再自行执行 IIFE，也不自行挂载扩展菜单。
 
 ---
 
@@ -198,16 +232,18 @@ Kit 规范守护测试：`npm run test:kit`。
 
 | 分支 | 内容 | 用途 |
 |---|---|---|
-| `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/`（79 个文件，约 2.1 MB） | 开发、评审、跑测试 |
-| `release` | 仅扩展运行时（13 个文件，约 364 KB） | 分发给酒馆扩展管理器 |
+| `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/`（约 2.1 MB） | 开发、评审、跑测试 |
+| `release` | 仅扩展运行时（约 370 KB） | 分发给酒馆扩展管理器 |
 
 `release` 分支从 `main` 派生，只做减法，不引入任何 `main` 上不存在的文件。
 在 `main` 上改动运行时代码后，需同步到 `release`：
 
 ```bash
 git checkout release
-git checkout main -- manifest.json index.js runtime.js Worldbook-Editor.js \
-  worldbook-api.js ai-prompts.js style.css LICENSE README.md \
+git checkout main -- manifest.json LICENSE README.md \
+  src/index.js src/runtime.js src/Worldbook-Editor.js \
+  src/worldbook-api.js src/ai-prompts.js \
+  src/styles/style.css src/styles/host-isolation.css \
   ui-kit/nvui-api.js ui-kit/tokens.css ui-kit/components.css
 git commit -m "chore: 同步运行时代码到 release 分支"
 ```

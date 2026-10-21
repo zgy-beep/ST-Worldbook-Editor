@@ -12,7 +12,7 @@ async function fixture(initial={}, legacy=null) {
   let store=initial;
   let saves=0;
   globalThis.SillyTavern={getContext:()=>({extensionSettings:store,saveSettingsDebounced:()=>saves++})};
-  const module=await import(`../runtime.js?case=${moduleId++}`);
+  const module=await import(`../src/runtime.js?case=${moduleId++}`);
   return {runtime:module.createRuntime(),values,get store(){return store},set store(value){store=value},get saves(){return saves}};
 }
 

@@ -1,0 +1,63 @@
+/**
+ * 宿主样式隔离层 · 仅对抗宿主主题对表单控件的全局 !important 覆盖
+ * ------------------------------------------------------------------
+ * 为什么需要这个文件：
+ *
+ *   部分酒馆主题（实测「ST-Styles」，第三方主题）会用「元素选择器 + !important」
+ *   重写全局表单控件：
+ *
+ *       input[type="text"], input[type="number"], input:not([type)],
+ *       textarea:not([type="search"]) {
+ *         background-color: var(--ui-color-sec) !important;   ← 宿主主题色
+ *         border: 1px solid ... !important;
+ *       }
+ *       select {
+ *         background-color: var(--ui-color-sec) !important;
+ *         border: 1px solid ... !important;
+ *         margin: calc(var(--mainFontSize) * 0.3) 0 !important;
+ *       }
+ *
+ *   Kit 的 `.nvui-input` 是裸类选择器（特异性 0,1,0），无法赢过宿主的
+ *   !important。结果是：面板切到浅色主题后，输入框背景仍是宿主深色，
+ *   而文字颜色仍走 Kit 的 --nvui-text（浅色主题下是深色），
+ *   最终呈现「深底 + 深字」，文字完全看不清。
+ *
+ * 为什么用 !important：
+ *   宿主的声明本身带 !important，只有同样带 !important 且特异性更高的规则
+ *   才能夺回控制权。这是本文件存在的唯一理由，也是全项目唯一允许
+ *   !important 的位置（业务样式 style.css 保持零 !important）。
+ *
+ * 约束：
+ *   1. 所有选择器必须以 #wbe-overlay 开头 —— 只影响本扩展面板，不污染酒馆界面；
+ *   2. 只恢复 Kit 组件自己的 token 取值，不引入任何新样式、不新增颜色字面量；
+ *   3. 取值一律走 --nvui-* 令牌，浅色 / 深色主题自动跟随。
+ *
+ * 上游跟进：NVUI Kit 的「§8 SillyTavern 宿主兼容红线」目前只隔离了 checkbox，
+ * 未覆盖 input / select / textarea，已向上游提交 issue 请求根治。
+ */
+
+/* ---------- 表单控件本体：夺回 Kit 令牌 ---------- */
+
+#wbe-overlay input.nvui-input,
+#wbe-overlay select.nvui-input,
+#wbe-overlay textarea.nvui-input {
+    background: var(--nvui-input-bg) !important;
+    border: none !important;
+    border-radius: var(--nvui-radius-sm) !important;
+    color: var(--nvui-text) !important;
+    margin: 0 !important;
+}
+
+/* Kit 的 hover 态用的是普通优先级，会被上面的 !important 压掉，这里单独还原 */
+#wbe-overlay input.nvui-input:hover,
+#wbe-overlay select.nvui-input:hover,
+#wbe-overlay textarea.nvui-input:hover {
+    background: var(--nvui-block-bg) !important;
+}
+
+/* ---------- 下拉选项：Kit 未定义 option 皮肤，否则跟随浏览器原生 / 宿主 ---------- */
+
+#wbe-overlay select.nvui-input option {
+    background: var(--nvui-bg-2) !important;
+    color: var(--nvui-text) !important;
+}

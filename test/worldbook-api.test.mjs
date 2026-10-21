@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorldbookApi } from '../worldbook-api.js';
+import { createWorldbookApi } from '../src/worldbook-api.js';
 
 test('modern reads use modern patches even when legacy methods coexist, preserving nested fields', async () => {
   let entries = [{uid:1, name:'港口', extra:{keep:true},
