@@ -41,6 +41,13 @@
 
 扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `index.js` 与 `style.css`。
 
+> **精简安装**：本仓库的 `main` 分支同时包含开发用的测试与文档（完整约 2.3 MB）。
+> 若只需要运行时，可让扩展管理器改拉 **`release` 分支** —— 该分支只保留扩展运行必需的
+> 12 个文件（约 380 KB）：`manifest.json`、7 个业务模块、`style.css`、`LICENSE`、
+> `README.md`，以及 `ui-kit/` 下的 `nvui-api.js` / `tokens.css` / `components.css`。
+> 酒馆的扩展管理器原生支持分支切换（扩展卡片上的 **Switch branch**），
+> 安装后在扩展列表点该按钮切到 `release` 即可；开发时切回 `main`。
+
 ### 方式二：当前本地安装（仓库尚未推送）
 
 1. 将整个 `ST-Worldbook-Editor` 目录放入 SillyTavern 的第三方扩展目录，例如：
@@ -186,6 +193,24 @@ npm run test:browser
 Kit 规范守护测试：`npm run test:kit`。
 
 测试覆盖标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、桌面/移动端布局、宿主模态让位、布局持久化与停用/重新启用生命周期。
+
+### 分支约定
+
+| 分支 | 内容 | 用途 |
+|---|---|---|
+| `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/` | 开发、评审、跑测试 |
+| `release` | 仅扩展运行时（12 个文件，约 380 KB） | 分发给酒馆扩展管理器 |
+
+`release` 分支从 `main` 派生，只做减法，不引入任何 `main` 上不存在的文件。
+在 `main` 上改动运行时代码后，需同步到 `release`：
+
+```bash
+git checkout release
+git checkout main -- manifest.json index.js runtime.js Worldbook-Editor.js \
+  worldbook-api.js ai-prompts.js style.css LICENSE README.md \
+  ui-kit/nvui-api.js ui-kit/tokens.css ui-kit/components.css
+git commit -m "chore: 同步运行时代码到 release 分支"
+```
 
 ---
 
