@@ -174,7 +174,9 @@ Kit 的 `.nvui-input` 是裸类选择器（特异性 0,1,0），赢不过宿主�
 只恢复 Kit 组件自己的 token 取值，浅色 / 深色主题自动跟随。
 
 > **上游跟进**：NVUI Kit 的「§8 SillyTavern 宿主兼容红线」目前只隔离了 checkbox，
-> 未覆盖 `input` / `select` / `textarea`。已向上游提交 issue 请求根治。
+> 未覆盖 `input` / `select` / `textarea`，且 kit 没有 `select option` 的皮肤。
+> 已向上游提交 issue 请求根治：
+> [zgy-beep/ui-kit#9 — 宿主主题以 !important 重写全局表单控件，导致 kit 表单组件失去 token 配色](https://github.com/zgy-beep/ui-kit/issues/9)
 
 ### 运行时接口
 
