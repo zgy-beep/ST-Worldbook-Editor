@@ -107,8 +107,13 @@ npm run test:browser
 - **破限提示词独立成页**（`#wbe-pane-jb`，tab key `jb`）：前置区 `CFG.jbPre` / 后置区 `CFG.jbPost`
   是两个**可编排的消息数组**（`[{role, content}]`），每区最多 6 条，可增删排序。
   前置区在任务之前、后置区在输出契约之前；契约永远压轴，不允许越过。
-  role 白名单：前置与后置本版都只放开 `system` / `user`，**`assistant` 预填充刻意未开放**
-  （它在 JSON 任务里会成为输出前缀、污染 `parseAIJSON`）。
+  role 白名单按区域区分：
+  - **前置区** `system` / `user` / **模拟已接受**（合成角色，落成 `user` 角色下发）。
+    **刻意不提供裸 `assistant`** —— 它会成为请求首条 assistant，Anthropic 端点会 400，
+    且给模型一个「我已经这么说了」的错误锚点反而容易被模仿污染。
+  - **后置区** `system` / `user` / `assistant`（预填充，会被移到整条请求最末，
+    模型从那里续写；只保留最后一条 assistant，其余降级为 `system`）。
+    预填充会成为输出前缀，**只建议用于纯文本任务**，JSON 任务会污染 `parseAIJSON`。
   非法 role 降级为 `system`、空消息丢弃，规则在 `ai-prompts.js` 的 `normalizeMessages`。
   迁移链 `jailbreak` → `jbHead/jbTail` → `jbPre/jbPost` 在 `runtime.migrateJailbreakMessages`，
   只在新数组为空时补位。改这块必须同步 `ai-prompts.js`、三个测试文件、README 与本文件。

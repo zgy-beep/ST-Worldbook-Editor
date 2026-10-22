@@ -15,10 +15,20 @@ paths: src/ai-prompts.js, src/worldbook-api.js
   前置消息（按序）→ 任务 system（含 style）→ 任务 user → **后置消息（按序）**
   → 输出契约 system →（json 且 retry 时）强化 JSON 提醒 system。
 - **破限是两个消息数组**（`pre` / `post`，元素 `{role, content}`），不是两段文本。
-  role 白名单按区域区分（`PRE_ROLES` / `POST_ROLES`），本版都只放开 `system` / `user`：
-  `assistant` 预填充会让 JSON 任务拿到带前缀的残缺输出，**不要在没有配套拼接逻辑时放开**。
+  role 白名单按区域区分（见 `PRE_ROLES` / `POST_ROLES`）：
+  - **前置区**：`system` / `user` / **模拟已接受**（`accepted` 是**合成角色**，
+    不是真实 API role）。`normalizeMessages` 把它落成 `user` 角色并加
+    「（上一轮回复）」前缀。
+    **不要在前置区放裸 `assistant`** —— 它会成为请求首条 assistant，
+    Anthropic 官方端点会 400（首条必须 user/system）；OpenAI 兼容端点虽接受，
+    但等于给模型一个「我已经这么说了」的错误锚点，容易被模仿污染。
+  - **后置区**：`system` / `user` / `assistant`。`assistant` 是**预填充**，
+    会被移到整条请求最末，模型从那里续写（Chat Completion 的 API 约束）。
+    只取**最后一条** assistant，其余降级为 `system` 且保持原位。
+    预填充会成为输出前缀，**只建议用于纯文本任务**。
 - **非法 role 降级为 system、空 content 丢弃**，在 `normalizeMessages` 里统一处理；
   不要为了「清理」把整条消息丢掉——用户写的内容比 role 更重要。
+  但**「模拟已接受」不是非法 role**，它有专属分支，不要误降级。
 - **输出契约必须压轴**：它是格式硬约束，排在它后面的任何指令都会削弱 JSON/正文稳定性。
   所以后置消息永远位于契约**之前**，不可越过。
 - 任一条为空则跳过；`pre` / `post` 为空数组、`null` 或非数组时都不追加任何消息。不要内置破限文案。

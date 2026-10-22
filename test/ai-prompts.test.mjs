@@ -54,12 +54,13 @@ test('buildMessages 丢弃空消息并把非法 role 降级为 system', () => {
 
   assert.deepEqual(messages.map(m => m.role),
     ['system', 'user', 'system', 'user', 'system', 'system']);
-  assert.equal(messages[0].content, '越权角色', '前置区的 assistant 应降级为 system');
+  assert.equal(messages[0].content, '越权角色', '前置区的裸 assistant 应降级为 system');
   assert.equal(messages[1].content, '合法');
   assert.equal(messages[2].content, 'SYS');
   assert.equal(messages[3].content, 'USER');
   assert.equal(messages[4].content, '另一个越权角色', '后置区的 tool 应降级为 system');
   assert.equal(messages[5].content, CONTRACT);
+  assert.doesNotMatch(messages[0].content, /上一轮回复/, '降级路径不应带合成前缀');
 });
 
 test('buildMessages 不传或传空 pre / post 时只保留任务与契约', () => {
@@ -299,7 +300,7 @@ test('buildMessages 只取最后一条 assistant 作预填充，其余降级为 
   assert.equal(messages[5].content, '第二条A', '只有最后一条成为预填充');
 });
 
-test('buildMessages 前置区的 assistant 仍然被降级（前置区不支持预填充）', () => {
+test('buildMessages 前置区的裸 assistant 降级为 system（前置区不提供预填充）', () => {
   const messages = buildMessages({
     system: 'SYS', user: 'USER',
     pre: [{ role: 'assistant', content: '前置里的 assistant' }],
@@ -307,6 +308,45 @@ test('buildMessages 前置区的 assistant 仍然被降级（前置区不支持�
   assert.deepEqual(messages.map(m => m.role), ['system', 'system', 'user', 'system']);
   assert.equal(messages[0].content, '前置里的 assistant');
   assert.equal(messages[0].role, 'system');
+});
+
+test('buildMessages 前置区「模拟已接受」落成 user 角色并加「（上一轮回复）」前缀', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    pre: [{ role: 'accepted', content: '好的，我理解并接受上述设定。' }],
+  });
+  // 关键：绝不能是 assistant —— 那会让请求首条就是 assistant，部分端点会 400
+  assert.deepEqual(messages.map(m => m.role), ['user', 'system', 'user', 'system']);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, '（上一轮回复）好的，我理解并接受上述设定。');
+  assert.equal(messages[1].content, 'SYS');
+});
+
+test('buildMessages 「模拟已接受」与 system / user 可混排，且不会变成预填充', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    pre: [
+      { role: 'system', content: '框架声明' },
+      { role: 'accepted', content: '已接受。' },
+    ],
+    post: [{ role: 'assistant', content: 'PREFILL' }],
+  });
+  assert.deepEqual(messages.map(m => m.role),
+    ['system', 'user', 'system', 'user', 'system', 'assistant']);
+  assert.equal(messages[0].content, '框架声明');
+  assert.equal(messages[1].content, '（上一轮回复）已接受。');
+  assert.equal(messages[messages.length - 1].content, 'PREFILL', '预填充仍必须是最后一条');
+});
+
+test('buildMessages 后置区不认「模拟已接受」，降级为 system', () => {
+  const messages = buildMessages({
+    system: 'SYS', user: 'USER',
+    post: [{ role: 'accepted', content: '后置的 accepted' }],
+  });
+  assert.deepEqual(messages.map(m => m.role), ['system', 'user', 'system', 'system']);
+  assert.equal(messages[2].content, '后置的 accepted');
+  assert.equal(messages[2].role, 'system');
+  assert.doesNotMatch(messages[2].content, /上一轮回复/, '后置区降级后不应带合成前缀');
 });
 
 test('buildMessages 预填充与 retry 共存时，重试提醒在预填充之前', () => {
