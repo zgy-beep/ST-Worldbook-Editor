@@ -250,6 +250,169 @@ try {
   assert.ok(await page.evaluate(()=>window.jbNode===document.querySelector('#wbe-jbpre .wbe-jbtext')));
   assert.equal(await page.locator('#wbe-jbpost .wbe-jbtext').first().inputValue(),'结尾重申：按既定尺度输出。');
 
+  // 新内置模板必须出现在分组下拉里，但不自动套用。
+  const templateValue = await page.evaluate(() =>
+    [...document.querySelectorAll('#wbe-jbpreset option')]
+      .find(option => option.textContent === '世界书编辑·结构稳健')?.value);
+  assert.ok(templateValue && templateValue.startsWith('builtin:'), '「世界书编辑·结构稳健」应是内置预设');
+  await page.locator('#wbe-jbpreset').selectOption(templateValue);
+  assert.match(await page.locator('#wbe-jbhint').textContent(), /中性编辑边界/);
+  assert.equal(await page.evaluate(()=>settings.st_worldbook_editor.jbPre[0].content),'好的，我理解并接受上述设定。',
+    '仅选择预设不得改写当前编排');
+
+  // 自定义预设：保存后当前编排不变、不发模型请求，名称按字面文本转义。
+  const customName = '验收<img src=x>';
+  const beforeSave = await page.evaluate(() => ({
+    pre: structuredClone(settings.st_worldbook_editor.jbPre),
+    post: structuredClone(settings.st_worldbook_editor.jbPost),
+    calls: calls.length,
+  }));
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(customName);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.waitForFunction(name =>
+    [...document.querySelectorAll('#wbe-jbpreset option')].some(option => option.textContent === name), customName);
+  const saved = await page.evaluate(() => ({
+    selected: document.querySelector('#wbe-jbpreset').value,
+    optionTexts: [...document.querySelectorAll('#wbe-jbpreset option')].map(option => option.textContent),
+    builtinCount: document.querySelectorAll('#wbe-jbpreset optgroup[label="内置预设"] option').length,
+    custom: structuredClone(settings.st_worldbook_editor.jbCustomPresets),
+    pre: structuredClone(settings.st_worldbook_editor.jbPre),
+    post: structuredClone(settings.st_worldbook_editor.jbPost),
+    calls: calls.length,
+    imgCount: document.querySelectorAll('#wbe-jbpreset img').length,
+    xss: window.__xss,
+  }));
+  assert.match(saved.selected, /^custom:/, '保存后应选中新建项');
+  assert.ok(saved.optionTexts.includes(customName), '名称应按字面文本显示');
+  assert.equal(saved.imgCount, 0, '预设名称不得被当成 HTML 解析');
+  assert.equal(saved.xss, undefined, '预设名称不得执行脚本');
+  assert.equal(saved.builtinCount, 8, '内置预设应为 8 个');
+  assert.equal(saved.custom.length, 1);
+  assert.deepEqual(Object.keys(saved.custom[0]).sort(), ['id', 'name', 'post', 'pre']);
+  assert.deepEqual(saved.custom[0].pre, beforeSave.pre, '保存的是当前前置消息的完整副本');
+  assert.deepEqual(saved.custom[0].post, beforeSave.post, '保存的是当前后置消息的完整副本');
+  assert.deepEqual(saved.pre, beforeSave.pre, '保存本身不得改变当前编排');
+  assert.deepEqual(saved.post, beforeSave.post, '保存本身不得改变当前编排');
+  assert.equal(saved.calls, beforeSave.calls, '保存不得发模型请求');
+
+  // 套用后编辑当前消息，不得反向污染已保存的自定义预设（独立深拷贝）。
+  await page.locator('[data-a=jbapply]').click();
+  await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('套用后临时修改');
+  const applied = await page.evaluate(() => ({
+    storedPre: settings.st_worldbook_editor.jbCustomPresets[0].pre[0].content,
+    currentPre: settings.st_worldbook_editor.jbPre[0].content,
+    role: settings.st_worldbook_editor.jbPre[0].role,
+  }));
+  assert.equal(applied.storedPre, '好的，我理解并接受上述设定。', '套用后的编辑不得污染自定义预设');
+  assert.equal(applied.currentPre, '套用后临时修改');
+  assert.equal(applied.role, 'accepted', 'accepted 套用后不得被降级');
+
+  // 同名保存：先取消（不改任何数据），再确认更新（不新建同名项）。
+  await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('更新候选内容');
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(customName);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('[data-a=jbupdateconfirm]').waitFor();
+  await page.locator('[data-a=jbpresetcancel]').click();
+  const afterUpdateCancel = await page.evaluate(() => ({
+    custom: structuredClone(settings.st_worldbook_editor.jbCustomPresets),
+    currentPre: settings.st_worldbook_editor.jbPre[0].content,
+  }));
+  assert.equal(afterUpdateCancel.custom.length, 1, '取消同名更新不得新建副本');
+  assert.equal(afterUpdateCancel.custom[0].pre[0].content, '好的，我理解并接受上述设定。', '取消同名更新不得改预设');
+  assert.equal(afterUpdateCancel.currentPre, '更新候选内容', '取消同名更新不得改当前编排');
+
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(customName);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('[data-a=jbupdateconfirm]').waitFor();
+  // 同名更新确认出现后编辑消息：旧 pending 必须失效，不能拿旧快照确认。
+  await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('更新候选内容 2');
+  await page.waitForFunction(() => !document.querySelector('[data-a=jbupdateconfirm]'));
+  assert.equal((await page.locator('#wbe-jbpreset-panel').textContent()).trim(), '',
+    '编辑消息后应关闭旧同名更新确认');
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(customName);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('[data-a=jbupdateconfirm]').click();
+  await page.waitForFunction(() => settings.st_worldbook_editor.jbCustomPresets?.[0]?.pre?.[0]?.content === '更新候选内容 2');
+  const afterUpdate = await page.evaluate(() => ({
+    custom: structuredClone(settings.st_worldbook_editor.jbCustomPresets),
+    currentPre: settings.st_worldbook_editor.jbPre[0].content,
+  }));
+  assert.equal(afterUpdate.custom.length, 1, '确认同名更新后仍应只有一项');
+  assert.equal(afterUpdate.custom[0].pre[0].content, '更新候选内容 2', '确认后应更新现有预设');
+  assert.equal(afterUpdate.currentPre, '更新候选内容 2', '更新预设不得改当前编排');
+
+  // 同名内置预设不可覆盖，也不得新建自定义项。
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill('基础创作框架');
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('#wbe-jbpreset-panel .is-warn').waitFor();
+  const builtinCollision = await page.evaluate(() => ({
+    error: document.querySelector('#wbe-jbpreset-panel .is-warn').textContent,
+    customCount: settings.st_worldbook_editor.jbCustomPresets.length,
+  }));
+  assert.match(builtinCollision.error, /内置预设不可覆盖/);
+  assert.equal(builtinCollision.customCount, 1, '不得覆盖同名内置预设或新建自定义项');
+  await page.locator('[data-a=jbpresetcancel]').click();
+
+  // 名称长度按码点：40 个 emoji 可保存，41 个被拒绝；临时项用完删除。
+  const emoji40 = '😀'.repeat(40);
+  const emoji41 = '😀'.repeat(41);
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(emoji41);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('#wbe-jbpreset-panel .is-warn').waitFor();
+  const tooLongName = await page.evaluate(() => ({
+    error: document.querySelector('#wbe-jbpreset-panel .is-warn').textContent,
+    count: settings.st_worldbook_editor.jbCustomPresets.length,
+  }));
+  assert.match(tooLongName.error, /40/);
+  assert.equal(tooLongName.count, 1, '41 码点名称不得创建预设');
+  await page.locator('[data-a=jbpresetcancel]').click();
+
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill(emoji40);
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.waitForFunction(name =>
+    [...document.querySelectorAll('#wbe-jbpreset option')].some(option => option.textContent === name), emoji40);
+  const emojiSaved = await page.evaluate(() => ({
+    count: settings.st_worldbook_editor.jbCustomPresets.length,
+    selected: document.querySelector('#wbe-jbpreset').value,
+    name: settings.st_worldbook_editor.jbCustomPresets.at(-1).name,
+  }));
+  assert.equal(emojiSaved.count, 2, '40 码点 emoji 名称应可保存');
+  assert.match(emojiSaved.selected, /^custom:/);
+  assert.equal(emojiSaved.name, emoji40);
+  await page.locator('[data-a=jbdelopen]').click();
+  await page.locator('[data-a=jbdelconfirm]').click();
+  await page.waitForFunction(name =>
+    ![...document.querySelectorAll('#wbe-jbpreset option')].some(option => option.textContent === name), emoji40);
+  assert.equal(await page.evaluate(() => settings.st_worldbook_editor.jbCustomPresets.length), 1,
+    '临时 emoji 预设应已清理');
+
+  // 异常 jbCustomPresets：提示可理解错误、原值保持、不新增；随后恢复 fixture。
+  const originalCustomPresets = await page.evaluate(() =>
+    structuredClone(settings.st_worldbook_editor.jbCustomPresets));
+  await page.evaluate(() => { settings.st_worldbook_editor.jbCustomPresets = 'corrupt'; });
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill('异常数据预设');
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.locator('#wbe-jbpreset-panel .is-warn').waitFor();
+  const abnormal = await page.evaluate(() => ({
+    store: settings.st_worldbook_editor.jbCustomPresets,
+    error: document.querySelector('#wbe-jbpreset-panel .is-warn').textContent,
+  }));
+  assert.equal(abnormal.store, 'corrupt', '异常列表必须原值保留');
+  assert.match(abnormal.error, /自定义预设数据异常，未覆盖，请先修复/);
+  await page.locator('[data-a=jbpresetcancel]').click();
+  await page.evaluate(original => { settings.st_worldbook_editor.jbCustomPresets = original; }, originalCustomPresets);
+
+  // 恢复 AI 检查所需的当前编排；自定义预设保持更新后的副本。
+  await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('好的，我理解并接受上述设定。');
+
   await page.locator('#wbe-tab-ai').click();
   assert.equal(await page.locator('[name=instr]').inputValue(),'润色港口描述');
   await page.locator('[data-a=aiapply]').click();
@@ -430,8 +593,73 @@ try {
     return acc ? acc.classList.contains('is-open') : null;
   });
   assert.equal(accRestored, false, '重建面板后折叠条应保持折叠状态');
+
+  // 自定义预设跨停用 / 重新启用仍在；删除取消/确认都不改当前编排。
+  await page.locator('.nvui-bottom-nav-item[data-key="jb"]').click();
+  await page.waitForTimeout(250);
+  await page.waitForFunction(name =>
+    [...document.querySelectorAll('#wbe-jbpreset option')].some(option => option.textContent === name), customName);
+  const customValue = await page.evaluate(name =>
+    [...document.querySelectorAll('#wbe-jbpreset option')].find(option => option.textContent === name).value, customName);
+  await page.locator('#wbe-jbpreset').selectOption(customValue);
+  const beforeDelete = await page.evaluate(() => ({
+    pre: structuredClone(settings.st_worldbook_editor.jbPre),
+    post: structuredClone(settings.st_worldbook_editor.jbPost),
+    count: settings.st_worldbook_editor.jbCustomPresets.length,
+  }));
+  assert.equal(beforeDelete.count, 1, '重新启用后自定义预设应仍存在');
+
+  // 删除确认出现后切换下拉：必须取消旧确认，不能误删旧选中项。
+  await page.locator('[data-a=jbdelopen]').click();
+  await page.locator('[data-a=jbdelconfirm]').waitFor();
+  await page.locator('#wbe-jbpreset').selectOption('builtin:basic');
+  await page.waitForFunction(() => !document.querySelector('[data-a=jbdelconfirm]'));
+  assert.equal(await page.evaluate(() => settings.st_worldbook_editor.jbCustomPresets.length), 1,
+    '切换下拉后旧删除确认不得删除自定义预设');
+  await page.locator('#wbe-jbpreset').selectOption(customValue);
+
+  await page.locator('[data-a=jbdelopen]').click();
+  await page.locator('[data-a=jbdelconfirm]').waitFor();
+  await page.locator('[data-a=jbpresetcancel]').click();
+  const afterDeleteCancel = await page.evaluate(() => ({
+    count: settings.st_worldbook_editor.jbCustomPresets.length,
+    pre: structuredClone(settings.st_worldbook_editor.jbPre),
+    post: structuredClone(settings.st_worldbook_editor.jbPost),
+  }));
+  assert.equal(afterDeleteCancel.count, 1, '取消删除不得删除预设');
+  assert.deepEqual(afterDeleteCancel.pre, beforeDelete.pre, '取消删除不得改当前编排');
+  assert.deepEqual(afterDeleteCancel.post, beforeDelete.post, '取消删除不得改当前编排');
+
+  await page.locator('[data-a=jbdelopen]').click();
+  await page.locator('[data-a=jbdelconfirm]').click();
+  await page.waitForFunction(name =>
+    ![...document.querySelectorAll('#wbe-jbpreset option')].some(option => option.textContent === name), customName);
+  const afterDelete = await page.evaluate(() => ({
+    count: settings.st_worldbook_editor.jbCustomPresets.length,
+    builtinCount: document.querySelectorAll('#wbe-jbpreset optgroup[label="内置预设"] option').length,
+    pre: structuredClone(settings.st_worldbook_editor.jbPre),
+    post: structuredClone(settings.st_worldbook_editor.jbPost),
+  }));
+  assert.equal(afterDelete.count, 0, '确认删除应移除自定义预设');
+  assert.equal(afterDelete.builtinCount, 8, '删除自定义预设不得影响内置预设');
+  assert.deepEqual(afterDelete.pre, beforeDelete.pre, '删除预设不得改当前编排');
+  assert.deepEqual(afterDelete.post, beforeDelete.post, '删除预设不得改当前编排');
+
+  // 全空编排：UI 给出可理解错误，不创建空预设、不清空/裁剪用户配置。
+  await page.locator('[data-a=jbclear]').click();
+  await page.waitForFunction(() => settings.st_worldbook_editor.jbPre.length === 0
+    && settings.st_worldbook_editor.jbPost.length === 0);
+  await page.locator('[data-a=jbsaveopen]').click();
+  await page.locator('#wbe-jbpreset-name').fill('空编排');
+  await page.locator('[data-a=jbsaveconfirm]').click();
+  await page.waitForFunction(() =>
+    document.querySelector('#wbe-jbpreset-panel .is-warn')?.textContent.includes('至少要有'));
+  assert.equal(await page.evaluate(() => settings.st_worldbook_editor.jbCustomPresets.length), 0,
+    '全空编排不得创建自定义预设');
+  await page.locator('[data-a=jbpresetcancel]').click();
+
   assert.deepEqual(errors,[]);
-  console.log('Browser smoke passed: standard entry, migration, helper bridge, AI prompts/parse/apply, tabs, desktop/mobile, host modal, layout, lifecycle.');
+  console.log('Browser smoke passed: standard entry, migration, helper bridge, AI prompts/parse/apply, tabs, desktop/mobile, host modal, layout, custom presets, lifecycle.');
 } finally {
   await browser.close();
   await new Promise(done=>server.close(done));

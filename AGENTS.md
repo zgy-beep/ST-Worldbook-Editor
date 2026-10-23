@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.6.0`，宿主最低版本 `1.17.0`。
+当前版本 `0.7.0`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -20,7 +20,8 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
   └─ src/runtime.js   宿主适配：extensionSettings / 布局存储 / TavernHelper 访问
        └─ src/Worldbook-Editor.js   业务与界面，导出 initializeEditor(runtime)
             ├─ src/worldbook-api.js  酒馆助手新旧接口兼容层
-            └─ src/ai-prompts.js     AI 消息拼装与 JSON 解析（不依赖运行时，可被 Node 单测）
+            ├─ src/ai-prompts.js     AI 消息拼装与 JSON 解析（不依赖运行时，可被 Node 单测）
+            └─ src/jb-presets.js     破限预设/保存校验纯函数（零运行时，可被 Node 单测）
 ```
 
 - `src/index.js` 只管生命周期与菜单，**不写业务 UI**。
@@ -32,8 +33,8 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 ## 常用命令
 
 ```bash
-npm test              # 43 项项目测试（node --test test/*.test.mjs）
-npm run test:kit      # 354 项 Kit 规范守护（node ui-kit/test/test-ui-kit.js）
+npm test              # 项目测试（扩展自身行为）
+npm run test:kit      # Kit 规范守护（上游 Kit 自包含套件）
 npm run test:browser  # 浏览器端到端冒烟，需额外两个环境变量（见下）
 ```
 
@@ -91,7 +92,7 @@ npm run test:browser
 | 分支 | 内容 | 用途 |
 |---|---|---|
 | `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/` | 开发、评审、跑测试 |
-| `release` | 仅扩展运行时（14 个文件，约 366 KB） | 分发给酒馆扩展管理器 |
+| `release` | 仅扩展运行时（含 `src/jb-presets.js`） | 分发给酒馆扩展管理器 |
 
 `release` 从 `main` 派生，**只做减法**，不引入 `main` 上不存在的文件。
 
@@ -106,7 +107,8 @@ npm run test:browser
   - 对应上游 issue #9 / #10 / #11 均已 CLOSED COMPLETED。
 - **破限提示词独立成页**（`#wbe-pane-jb`，tab key `jb`）：前置区 `CFG.jbPre` / 后置区 `CFG.jbPost`
   是两个**可编排的消息数组**（`[{role, content}]`），每区最多 6 条，可增删排序。
-  前置区在任务之前、后置区在输出契约之前；契约永远压轴，不允许越过。
+  前置区在任务之前、后置区在输出契约之前；契约是后置消息之后的格式约束，
+  若后置区存在 `assistant` 预填充，它会按 API 约束排到契约/重试提醒之后（最后一条）。
   role 白名单按区域区分：
   - **前置区** `system` / `user` / **模拟已接受**（合成角色，落成 `user` 角色下发）。
     **刻意不提供裸 `assistant`** —— 它会成为请求首条 assistant，Anthropic 端点会 400，
@@ -116,7 +118,14 @@ npm run test:browser
     预填充会成为输出前缀，**只建议用于纯文本任务**，JSON 任务会污染 `parseAIJSON`。
   非法 role 降级为 `system`、空消息丢弃，规则在 `ai-prompts.js` 的 `normalizeMessages`。
   迁移链 `jailbreak` → `jbHead/jbTail` → `jbPre/jbPost` 在 `runtime.migrateJailbreakMessages`，
-  只在新数组为空时补位。改这块必须同步 `ai-prompts.js`、三个测试文件、README 与本文件。
+  只在新数组为空时补位。改这块必须同步 `ai-prompts.js`、相关测试文件、README 与本文件。
+- **破限预设**：内置 8 个（含中性模板「世界书编辑·结构稳健」），id 命名空间 `builtin:`；
+  自定义预设存在 `CFG.jbCustomPresets`（默认 `[]`），元素固定 `{ id, name, pre, post }`，
+  id 命名空间 `custom:`，与 `layout` 分开，只保存用户消息，不携带 key / model / 世界书内容。
+  UI 提供「保存为自定义预设」「删除自定义预设」；同名自定义用内联「更新现有 / 取消」，
+  内置名不可覆盖，内置不可删除。保存前由 `src/jb-presets.js` 校验：两区必须为数组、
+  各 ≤ 6 条、role 在白名单内、content 为字符串、至少一条非空；空占位保留，
+  不自动裁剪或改写当前 `jbPre/jbPost`。名称 trim 后必填、≤ 40 码点，入 DOM 前转义。
 - **折叠条的两个坑**（都踩过）：
   1. 开合必须调 `acc.setOpen()`，不能直接 `toggleClass` —— 前者被 Kit 包装过会落盘；
   2. 任何重绘折叠条的操作（如 `renderSet()`）都必须重新 `adoptAccordions()`，
