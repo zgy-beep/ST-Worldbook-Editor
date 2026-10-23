@@ -189,7 +189,13 @@ try {
   await page.goto(origin);
   await page.locator('#wbe-menu').waitFor();
   await page.locator('#wbe-menu').click();
-  await page.locator('#wbe-overlay:not([hidden])').waitFor();
+  await page.locator('#wbe-overlay:not([hidden])').waitFor({timeout:10000}).catch(async error => {
+    const state = await page.evaluate(() => ({
+      notices: window.notices,
+      overlays: [...document.querySelectorAll('[id^="wbe-"]')].map(node => [node.id, node.hidden]),
+    }));
+    throw new Error(`打开面板失败：${JSON.stringify({errors, state})}`, {cause:error});
+  });
   await page.locator('.wbe-row').first().waitFor();
   const desktop = await page.locator('.nvui-panel').boundingBox();
   assert.equal(Math.round(desktop.width),720);

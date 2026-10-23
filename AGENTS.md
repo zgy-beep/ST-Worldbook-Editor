@@ -27,7 +27,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 - `src/index.js` 只管生命周期与菜单，**不写业务 UI**。
 - `src/runtime.js` 是**唯一**允许接触 `SillyTavern.getContext()` 的地方；其他模块通过 runtime 拿能力。
 - `src/ai-prompts.js` 必须保持零运行时依赖，否则 Node 单测跑不起来。
-- `ui-kit/` 是 **NVUI Kit v2.6.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
+- `ui-kit/` 是 **NVUI Kit v2.7.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
   不要把扩展业务逻辑写进 `ui-kit/`，也不要改它的 `nvui-api.js`。
 
 ## 常用命令
@@ -96,9 +96,15 @@ npm run test:browser
 
 `release` 从 `main` 派生，**只做减法**，不引入 `main` 上不存在的文件。
 
-### 已落地的关键改造（2026-10-21，改动前务必先 `git status` 确认是否仍然成立）
+### 已落地的关键改造（改动前务必先 `git status` 确认是否仍然成立）
 
-- **Kit 已升级到 v2.6.0**，此前自建的三套临时方案全部退场，改为复用上游能力：
+- **Kit 已升级到 v2.7.0（2026-10-23）**：内置上游 `v2.7.0` 标签资产；
+  上游 #12（`optgroup`）、#13（焦点）、#14（宿主模态 Esc）均已修复并关闭。
+  `.nvui-form-scope` 是自定义普通容器的 opt-in 表单隔离；本扩展的标准面板已在默认载体内，
+  不需要额外添加该类。升级追补验收记录见 `docs/kit-integration-audit.md`。
+  Kit 浏览器套件曾偶发半选 checkbox 过渡样式断言失败，见上游 issue #15。
+
+- **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），
     本扩展的 `src/styles/host-isolation.css` **只剩 `.wbe-chipin` 一条**；
   - 批量选择复选框 → 复用 `.nvui-checkbox`（HTML 写 `class="nvui-checkbox wbe-chk"`，

@@ -19,7 +19,7 @@ export function initializeEditor(runtime) {
   let NVUI = null;
   async function ensureNVUI() {
     const api = runtime.NVUI;
-    if (!api || api.version !== '2.6.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.6.0');
+    if (!api || api.version !== '2.7.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.7.0');
     NVUI = api;
     return api;
   }
@@ -1818,7 +1818,7 @@ ${GUIDE}
       version: 'v0.7.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
-      // 2.6.0 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
+      // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
       persist: { size: true, tab: true, accordion: true, storage: runtime.layoutStorage },
       themeToggle: true,
       onThemeChange(theme) { panel.dialog.classList.toggle('nvui-theme-light', theme === 'light'); },

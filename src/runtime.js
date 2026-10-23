@@ -334,7 +334,7 @@ function normalizeLayoutKey(key) {
 }
 
 /**
- * NVUI Kit v2.6.0 的 StorageAdapter 实现。
+ * NVUI Kit v2.7.0 的 StorageAdapter 实现。
  *
  * 已核对本地 ui-kit/nvui-api.js：
  * - persist 读取使用 get(key) / set(key, value)；

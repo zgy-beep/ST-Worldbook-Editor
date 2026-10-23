@@ -1,6 +1,6 @@
 # SillyTavern 世界书编辑器 (ST-Worldbook-Editor)
 
-基于 **SillyTavern NVUI Kit v2.6.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
+基于 **SillyTavern NVUI Kit v2.7.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
@@ -18,7 +18,7 @@
 
 ## 功能特性
 
-- **NVUI Kit v2.6.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
+- **NVUI Kit v2.7.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
 - **世界书条目全生命周期管理**：新建、删除、编辑、实时预览、字数与 Token 估算；支持常驻、选择性触发、向量化等条目机制。
 - **批量操作**：多选、批量启用/禁用、批量分组、调整顺序、深度与触发概率。
 - **双向数据兼容**：兼容 SillyTavern 原生条目的 `disable`、`constant`、`selective`、`vectorized`、数值型 `position`，并在需要时映射到新的 `strategy` / `position` 结构。
@@ -231,11 +231,13 @@ jailbreak（单条） → jbHead / jbTail（首尾两段） → jbPre / jbPost�
 ### 已知限制
 
 - **工具页按钮行间距**：工具页两行按钮当前上下间距为 `0px`，属于本插件业务布局的已知问题，待修复；不影响功能。
-- **Kit 上游问题**：下拉 `optgroup` 配色、隐藏控件的焦点处理、Esc 关闭底层面板已反馈上游
+- **Kit 上游问题**：下拉 `optgroup` 配色、隐藏控件的焦点处理、Esc 关闭底层面板曾反馈上游
   [#12](https://github.com/zgy-beep/ui-kit/issues/12) /
   [#13](https://github.com/zgy-beep/ui-kit/issues/13) /
-  [#14](https://github.com/zgy-beep/ui-kit/issues/14)，本版本内置 Kit `2.6.0`，**不声称已修复**，也未新增 Kit 拉取或升级；
-  不同 OS / 浏览器的原生下拉与焦点表现可能不同，本扩展不承诺所有平台一致。
+  [#14](https://github.com/zgy-beep/ui-kit/issues/14)，上游在 Kit `2.7.0` 中修复，已随本扩展内置；
+  原生下拉在不同 OS / 浏览器的绘制仍可能不同。
+- **Kit 浏览器测试**：一次并行运行中半选复选框的过渡样式断言失败，串行复跑通过；
+  已向上游提交[测试稳定性 issue #15](https://github.com/zgy-beep/ui-kit/issues/15)。
 - **后端会按接口改写 role**：相邻同角色消息可能被合并；末尾 `system` 在 Gemini 类接口上
   会转成 `user`。因此不要把关键约束只押在「末尾是一条 system」上。
 - 破限效果取决于模型本身的安全训练强度，本扩展只提供表达能力与结构透明，不保证结果。
@@ -298,7 +300,7 @@ ST-Worldbook-Editor/
 │  └─ styles/
 │     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
 │     └─ host-isolation.css  # 宿主样式隔离层（唯一允许 !important 的文件）
-├─ ui-kit/                   # NVUI Kit v2.6.0 本地运行时与样式资产（自包含独立项目）
+├─ ui-kit/                   # NVUI Kit v2.7.0 本地运行时与样式资产（自包含独立项目）
 └─ test/                     # 项目测试与浏览器端到端冒烟
 ```
 
@@ -312,6 +314,9 @@ ST-Worldbook-Editor/
 > **v2.6.0 起已大幅收窄**：`.nvui-input` / `select` / `textarea` / `option` 的宿主隔离
 > 由 NVUI Kit 自己内置（`dialog.nvui-tl` + `.nvui-panel` 双载体，[issue #9](https://github.com/zgy-beep/ui-kit/issues/9) 已闭环），
 > 本扩展不再重复实现。
+
+Kit v2.7.0 另提供 opt-in `.nvui-form-scope`，供不在上述默认载体内的自定义容器使用；
+本扩展的标准面板已在默认载体内，无需额外加该类。
 
 现在该文件只负责 Kit 按设计覆盖不到的**业务自有控件** `.wbe-chipin`（关键词输入框）：
 
@@ -338,7 +343,7 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
 
 ### 批量选择复选框
 
-直接复用 Kit v2.6.0 的 `.nvui-checkbox`（[issue #10](https://github.com/zgy-beep/ui-kit/issues/10) 已闭环）：
+直接复用 Kit v2.7.0 的 `.nvui-checkbox`（[issue #10](https://github.com/zgy-beep/ui-kit/issues/10) 已闭环）：
 
 ```html
 <input type="checkbox" class="nvui-checkbox wbe-chk">
@@ -358,7 +363,7 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
   saveSettings(),  // 调用宿主 saveSettingsDebounced
   getHelper(),     // 实时读取 window.TavernHelper，未检测到返回 null；不缓存、不硬编码安装目录
   layoutStorage,   // { get(key), set(key, value), remove(key) }
-  NVUI,            // 本地 NVUI Kit 2.6.0 实例
+  NVUI,            // 本地 NVUI Kit 2.7.0 实例
   resetSettings(), // 只清本扩展命名空间与旧 wbe_settings_v1
 }
 ```
@@ -374,7 +379,7 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
 - 最低 SillyTavern 客户端版本：`1.17.0`（`manifest.json` 的 `minimum_client_version`）。`activate` / `disable` 等 manifest 生命周期钩子从 1.17.0 开始提供，与本文使用的生命周期一致。
 - 生命周期使用标准扩展钩子：`activate` → `init`，`disable` → `onDisable`。
 - 启动等待 `APP_READY`；如果扩展在 `APP_READY` 之后才加载，事件源会补发该事件。清理后再次初始化可重新创建菜单与面板。
-- NVUI Kit：`2.6.0`，随扩展本地提供。
+- NVUI Kit：`2.7.0`，随扩展本地提供。
 - 不新增网络 CDN 依赖。
 - 酒馆助手不是 `manifest.dependencies` 中的硬编码扩展目录依赖：本扩展在运行时检查 `window.TavernHelper`，避免酒馆助手安装目录改名后失效。
 

@@ -54,15 +54,15 @@ test('host isolation layer is scoped, token-only, and the only place allowed to 
   assert.match(stripComments(read('src/styles/style.css')),/@import\s+url\(['"]?\.?\/host-isolation\.css['"]?\)/);
 });
 
-test('Kit version and desktop geometry match the requested 2.6.0 standard',()=>{
-  assert.equal(JSON.parse(read('ui-kit/package.json')).version,'2.6.0');
+test('Kit version and desktop geometry match the requested 2.7.0 standard',()=>{
+  assert.equal(JSON.parse(read('ui-kit/package.json')).version,'2.7.0');
   assert.match(read('ui-kit/tokens.css'),/--nvui-panel-width:\s*720px/);
   assert.doesNotMatch(read('src/Worldbook-Editor.js'),/cdn\.jsdelivr|2147483647|showModal\(/);
 });
 
 test('form controls reuse Kit components instead of re-skinning them',()=>{
   const js=read('src/Worldbook-Editor.js');
-  // 批量选择复选框必须复用 Kit v2.6.0 的 .nvui-checkbox（不再自绘皮肤）
+  // 批量选择复选框必须复用 Kit 的 .nvui-checkbox（不再自绘皮肤）
   assert.match(js,/class="nvui-checkbox wbe-chk"/);
   // 折叠条交给 Kit 接管持久化，而不是自己往 layout 里塞自定义键
   assert.match(js,/panel\.adoptAccordions\(/);

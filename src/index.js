@@ -157,7 +157,7 @@ async function ensureNVUI() {
     }
 
     if (!isNVUI(loaded)) {
-      throw new Error('NVUI Kit 2.6.0 未就绪：请确认 ui-kit/nvui-api.js 与 style.css 已随扩展安装');
+      throw new Error('NVUI Kit 2.7.0 未就绪：请确认 ui-kit/nvui-api.js 与 style.css 已随扩展安装');
     }
 
     nvui = loaded;
