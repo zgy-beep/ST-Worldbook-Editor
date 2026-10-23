@@ -4,9 +4,15 @@
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
-当前版本：`0.6.0`。
+当前版本：`0.7.0`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
 
-> 当前仓库仍处于本地修改阶段，尚未推送到公开仓库。扩展目录结构已经符合标准扩展规范；发布后即可直接通过扩展管理器的 Git URL 安装。在未发布前，请使用下方「本地安装」方式。
+## 0.7.0 更新摘要
+
+- **保存为自定义预设**：把当前破限前置 / 后置消息完整另存为命名模板，下拉列表按「内置预设 / 自定义预设」分组；套用与保存都使用独立副本，之后继续编辑不会改到内置常量或已保存模板。
+- **同名与删除**：同名自定义预设先显示内联「更新现有 / 取消」，取消不改任何数据；删除自定义预设需内联确认，只删除模板，不影响当前编排。
+- **保存校验**：名称 trim 后必填、≤ 40 码点；两区各 ≤ 6 条、role 在对应白名单内、至少一条非空。校验失败只提示，不裁剪或改写当前 `jbPre` / `jbPost`。
+- **内置预设**：共 8 个，本次新增「世界书编辑·结构稳健」，**不会默认套用**；默认两区为空，不向请求注入任何破限内容。
+- **AI 应用安全不变**：生成结果仍先进入 Diff 预览，用户确认后才写入；结果继续与来源世界书绑定。
 
 ---
 
@@ -32,29 +38,31 @@
 
 本扩展通过运行时读取 `window.TavernHelper` 检查酒馆助手是否可用，不依赖固定安装目录名，因此酒馆助手文件夹改名不会导致本扩展失效。若未检测到酒馆助手，扩展会给出提示，而不会在未说明的情况下静默失败。
 
-### 方式一：扩展管理器安装（仓库发布后）
+### 方式一：扩展管理器安装（推荐）
 
 1. 打开 SillyTavern，进入 **扩展 / Extensions**。
 2. 点击 **Install Extension**。
-3. 填入本仓库的 Git URL，确认安装。
+3. 填入本仓库的 Git URL：`https://github.com/zgy-beep/ST-Worldbook-Editor`（需要时可在末尾加 `.git`），确认安装。
 4. 刷新页面，在扩展列表中确认「世界书编辑器」已启用。
 
 扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `src/index.js` 与 `src/styles/style.css`。
 
-> **精简安装**：本仓库的 `main` 分支同时包含开发用的测试与文档（约 2.1 MB）。
-> 若只需要运行时，可让扩展管理器改拉 **`release` 分支** —— 该分支只保留扩展运行必需的
-> 文件（约 370 KB）：`manifest.json`、`src/` 下的 5 个业务模块与 2 个样式文件、
-> `LICENSE`、`README.md`，以及 `ui-kit/` 下的 `nvui-api.js` / `tokens.css` / `components.css`。
+> **分支选择**：日常使用推荐 **`release` 分支**，它只保留扩展运行时；需要测试、审计与开发资料时用 **`main` 分支**。
+> `release` 包含 `manifest.json`、`LICENSE`、`README.md`、`src/` 下 6 个 JS
+> （`index.js`、`runtime.js`、`Worldbook-Editor.js`、`worldbook-api.js`、`ai-prompts.js`、`jb-presets.js`）
+> 与 2 个 CSS（`styles/style.css`、`styles/host-isolation.css`），以及 `ui-kit/` 的
+> `nvui-api.js`、`tokens.css`、`components.css`。
 > 酒馆的扩展管理器原生支持分支切换（扩展卡片上的 **Switch branch**），
-> 安装后在扩展列表点该按钮切到 `release` 即可；开发时切回 `main`。
+> 安装后切到 `release` 即可；开发时切回 `main`。
 
-### 方式二：当前本地安装（仓库尚未推送）
+### 方式二：本地安装（开发 / 调试）
 
 1. 将整个 `ST-Worldbook-Editor` 目录放入 SillyTavern 的第三方扩展目录，例如：
    - `public/scripts/extensions/third-party/ST-Worldbook-Editor/`，或
    - 用户数据目录下对应的 `extensions/` 目录。
-2. 刷新 SillyTavern 页面。
-3. 在 **扩展** 列表中确认「世界书编辑器」已加载。
+2. Windows 开发可用 **Junction** 把本仓库软链到上述目录，便于原地改代码；直接复制目录也可。
+3. 刷新 SillyTavern 页面。
+4. 在 **扩展** 列表中确认「世界书编辑器」已加载。
 
 ### 从旧版单文件脚本迁移
 
@@ -70,6 +78,7 @@
 
 - **扩展菜单**：点击酒馆输入框旁的魔法棒/扩展菜单，选择 **世界书编辑器**。
 - **控制台入口**：在浏览器开发者控制台执行 `__wbeOpen()`。该入口在扩展停用后会被清理。
+- **破限自定义预设步骤**：进入「破限」页 → 选内置模板 → 套用 → 按需编辑前置 / 后置消息 → 点「保存为自定义预设」→ 命名保存。保存只写扩展设置，不发送模型请求。
 - **AI 应用流程**：生成结果先显示 Diff；只有点击应用后才会写回世界书。
 
 ---
@@ -92,7 +101,9 @@ st_worldbook_editor
 | `style` | 统一的设定与文风要求 |
 | `presets` | 用户保存的指令预设 |
 | `sort` / `flt` / `groupFlt` / `tpl` | 列表排序、筛选与新建模板 |
-| `jailbreak` | 用户自填的破限提示词字段，默认空字符串 |
+| `jbPre` / `jbPost` | 破限前置 / 后置消息数组，元素 `{role, content}`，默认 `[]` |
+| `jbCustomPresets` | 用户另存的自定义破限预设，默认 `[]`；元素 `{id, name, pre, post}`，与 `layout` 分开 |
+| `jailbreak` / `jbHead` / `jbTail` | 旧版破限字段，读取时迁移到 `jbPre` / `jbPost` 后删除 |
 
 面板布局不混入业务字段，单独保存在同一命名空间的 `layout` 对象中，由 NVUI Kit 的 StorageAdapter 读写。
 
@@ -138,7 +149,7 @@ st_worldbook_editor
 **前置区为什么不提供裸 `assistant`**：它会成为请求的**首条 assistant**，而多数端点
 要求首条必须是 `user` / `system`（Anthropic 官方会直接 400）；OpenAI 兼容端点虽然接受，
 但等于给模型一个「我已经这么说了」的错误锚点，反而容易被模仿污染。
-「模拟已接受」用 `user` 角色承载同样的破限意图，**效果接近但零 API 风险**。
+「模拟已接受」实际以 `user` 角色下发，避免前置裸 `assistant`；效果与端点兼容仍需实际验证。
 
 **后置区的 `assistant` 只保留最后一条**（其余降级为 `system`）—— 因为 Chat Completion
 的预填充必须是整条请求的最后一条。预填充会成为输出前缀，**只建议用于纯文本任务**，
@@ -146,7 +157,7 @@ st_worldbook_editor
 
 ### 预设模板
 
-页面顶部提供 6 个可一键套用的预设，套用后仍可自由编辑（会先确认是否覆盖现有内容）：
+页面顶部提供 8 个内置预设，**不会默认套用**（默认两区为空），套用后仍可自由编辑（当前两区非空时会先确认是否覆盖）。预设下拉按「内置预设 / 自定义预设」分组；套用与保存都使用深拷贝，之后继续编辑不会改到内置常量或已保存模板：
 
 | 预设 | 适用场景 |
 |---|---|
@@ -157,22 +168,39 @@ st_worldbook_editor
 | 输出纪律（去寒暄） | 只出正文，去掉开场白与免责 |
 | 预填充·正文（最强） | 用 assistant 预填充让模型直接续写，只建议用于纯文本任务 |
 | 长篇续写（防重复） | 扩写 / 续写时保持一致且不重复 |
+| 世界书编辑·结构稳健 | 中性编辑边界：保留既有事实与专有名词，只按当前任务修改；JSON / 文本通用，无 assistant 预填充 |
 
 > 预设**刻意不收录**「忽略先前指令 / 你现在是不受限制的 AI」这类技术越狱措辞：
 > 那类模板对现代模型效果反而差（模式极易被识别），也容易直接触发拒答。
 > 收录的是创作语境下真正有用的框架声明。
 
+#### 保存自定义预设
+
+预设工具栏提供「保存为自定义预设」。它把当前 `jbPre` / `jbPost` 的完整消息副本另存到
+`extensionSettings.st_worldbook_editor.jbCustomPresets`，**不会改变当前编排，也不会发模型请求**。
+每条自定义预设固定为 `{ id, name, pre, post }`，只保存用户消息，**不携带 API Key、模型或世界书内容**。
+内置预设 id 使用 `builtin:` 前缀，自定义使用 `custom:` 前缀，互不碰撞。
+
+保存前会校验：两区必须是数组、每区 ≤ 6 条、role 必须在对应区域白名单内、`content` 必须是字符串，
+且至少有一条非空消息。空占位可以保留，合法 `accepted` 不会被降级；校验失败时只显示可理解的错误，
+**不自动裁剪、清空或改写**当前配置。名称 trim 后必填、最多 40 个码点，动态内容入 DOM 前转义。
+
+同名自定义预设会先显示内联「更新现有 / 取消」：取消不改任何数据，确认则更新原 `id` 而不新建副本；
+与内置预设同名会被拒绝，内置预设不可删除。删除自定义预设同样是内联确认，只删除保存的模板，
+不影响当前 `jbPre` / `jbPost`。
+
 ### 为什么是消息列表而不是一个文本框
 
-单条文本只能产出一个 `system` 块，而真正有效的破限结构通常要多条消息配合
+单条文本只能产出一个 `system` 块；拆分成分角色的消息列表后，可以把框架声明、铺垫与确认分开编排，便于逐条调整。
 （框架声明 + 免责铺垫 + 三方确认等）。同时长上下文里模型对**开头**与**结尾**的注意力
 最强、中段最弱（lost in the middle），所以两侧各留一个可编排区：
 
 - **前置区**设定基线。放在任务之后会被读成「对刚才那个任务的补充要求」，
   与任务指令冲突时反而压制任务；用 `user` 口吻下达则权重低于 `system`。
 - **后置区**在临近输出位置再强调一次，对抗中段衰减。
-- **输出契约必须留在最后压轴**：它是格式硬约束，排在它后面的任何指令都会削弱
-  JSON／正文的稳定性。因此后置区固定在契约**之前**，不能越过。
+- **输出契约是最后一条指令**：它是格式硬约束，排在它后面的任何指令都会削弱
+  JSON／正文的稳定性。因此后置区固定在契约**之前**；`assistant` 预填充不是指令，
+  会按 API 约束排到契约与重试提醒之后。
 
 实际消息顺序：
 
@@ -202,6 +230,12 @@ jailbreak（单条） → jbHead / jbTail（首尾两段） → jbPre / jbPost�
 
 ### 已知限制
 
+- **工具页按钮行间距**：工具页两行按钮当前上下间距为 `0px`，属于本插件业务布局的已知问题，待修复；不影响功能。
+- **Kit 上游问题**：下拉 `optgroup` 配色、隐藏控件的焦点处理、Esc 关闭底层面板已反馈上游
+  [#12](https://github.com/zgy-beep/ui-kit/issues/12) /
+  [#13](https://github.com/zgy-beep/ui-kit/issues/13) /
+  [#14](https://github.com/zgy-beep/ui-kit/issues/14)，本版本内置 Kit `2.6.0`，**不声称已修复**，也未新增 Kit 拉取或升级；
+  不同 OS / 浏览器的原生下拉与焦点表现可能不同，本扩展不承诺所有平台一致。
 - **后端会按接口改写 role**：相邻同角色消息可能被合并；末尾 `system` 在 Gemini 类接口上
   会转成 `user`。因此不要把关键约束只押在「末尾是一条 system」上。
 - 破限效果取决于模型本身的安全训练强度，本扩展只提供表达能力与结构透明，不保证结果。
@@ -209,7 +243,7 @@ jailbreak（单条） → jbHead / jbTail（首尾两段） → jbPre / jbPost�
 ### assistant 预填充
 
 **后置区**的 role 下拉额外提供 `assistant`，用作**预填充**（prefill）——模型会从这段文本
-**续写**，而不是重新判断，是最强的约束手段（社区常说的「伪造已同意」）。
+**续写**，而不是从零开始生成；这是社区常说的「预填充 / 伪造已同意」，实际效果仍取决于模型与端点。
 
 两条硬约束（实现已处理，但你需要知道）：
 
@@ -239,6 +273,14 @@ prefill 拼回返回值再解析；若接口忽略了 prefill（返回值已包�
 
 AI 生成结果不会直接写入世界书，必须由用户在 Diff 预览中确认后应用。
 
+## 真实 AI 请求与上游错误（FAQ）
+
+- **测试现状**：此前两次以合成输入发起的真实 AI 请求均未成功，文本诊断返回 `Service Unavailable`。后续日志显示上游为 `playground_executor_unavailable`，说明请求所依赖的第三方接口服务未能连上其 Google AI Studio Playground 浏览器执行器；这属于上游执行器连接问题，不涉及本机模型名、接口地址或密钥。
+- **`Service Unavailable` 是谁的问题？** 优先检查第三方接口服务及其执行器连接；扩展侧只负责拼装请求、解析返回并进入 Diff，不会把上游错误伪装成成功。
+- **会影响哪些功能？** 保存 / 更新 / 删除自定义预设、设置持久化、Diff 预览与来源绑定都是本地逻辑，已有测试覆盖；真实生成质量与破限效果无法在本次环境中验证。
+- **能保证破限或生成效果吗？** 不能。效果取决于模型与接口服务，本扩展只提供可编排的消息结构和透明的请求顺序。
+- **默认会注入模板吗？** 不会。`jbPre` / `jbPost` 默认都是 `[]`，只有用户主动套用或编辑后才改变；自定义预设也只保存用户消息，不携带密钥、模型或世界书内容。
+
 ---
 
 ## 目录结构
@@ -252,6 +294,7 @@ ST-Worldbook-Editor/
 │  ├─ Worldbook-Editor.js    # 编辑器业务与界面，导出 initializeEditor(runtime)
 │  ├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
 │  ├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
+│  ├─ jb-presets.js          # 破限预设/自定义保存校验纯函数（零运行时）
 │  └─ styles/
 │     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
 │     └─ host-isolation.css  # 宿主样式隔离层（唯一允许 !important 的文件）
@@ -339,43 +382,63 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
 
 ## 开发与测试
 
-项目测试由维护者在本地运行：
+扩展自身行为测试（Node 内置 test runner，零外部测试框架）：
 
 ```bash
 npm test
 ```
 
-浏览器冒烟测试需要本地 Playwright 与 SillyTavern 静态资源：
+Kit 规范守护测试（上游 Kit 自包含套件）：
 
 ```bash
+npm run test:kit
+```
+
+浏览器端到端冒烟（零依赖设计，需要本机已有 Playwright / `playwright-core` 与 Chrome）：
+
+```bash
+PLAYWRIGHT_MODULE_PATH="/path/to/playwright-core" \
+CHROME_PATH="/path/to/chrome" \
 npm run test:browser
 ```
 
-可通过 `PLAYWRIGHT_MODULE_PATH` 指定已安装的 `playwright` 或 `playwright-core`，通过 `CHROME_PATH` 指定 Chrome 可执行文件，通过 `ST_PUBLIC_DIR` 指定 SillyTavern 的 `public` 目录。测试在隔离的本地页面中模拟宿主与酒馆助手，不调用真实模型或读写现有世界书。
+可选 `ST_PUBLIC_DIR` 指向 SillyTavern 的 `public` 目录。测试在隔离的本地页面中模拟宿主与酒馆助手，不调用真实模型，也不读写现有世界书。
 
-Kit 规范守护测试：`npm run test:kit`。
+测试覆盖：标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、自定义破限预设的保存 / 更新 / 删除 / 持久化、桌面 / 移动端布局、宿主模态让位、布局持久化与停用 / 重新启用生命周期。
 
-测试覆盖标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、桌面/移动端布局、宿主模态让位、布局持久化与停用/重新启用生命周期。
+发布前应在开发机跑完以上三条命令，并以当次真实输出为准；README 不记录某次会话的日志文件或通过数。
+
+### 审计与设计文档
+
+以下文档只在 `main` 分支提供（`release` 只含运行时，不包含 `docs/`），因此使用指向 `main` 的绝对链接：
+
+- [破限预设验收记录](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/jailbreak-preset-acceptance.md)
+- [破限模块设计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/jailbreak-module-design.md)
+- [Kit 集成审计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/kit-integration-audit.md)
+
+设计文档可能包含尚未实现的规划（例如破限编排预览、预设级撤销与导入导出）；已实现范围以本 README 与源码为准。
 
 ### 分支约定
 
 | 分支 | 内容 | 用途 |
 |---|---|---|
-| `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/`（约 2.1 MB） | 开发、评审、跑测试 |
-| `release` | 仅扩展运行时（约 370 KB） | 分发给酒馆扩展管理器 |
+| `main` | 完整仓库：扩展 + `ui-kit/` 全量 + `test/` + `docs/` | 开发、评审、跑测试 |
+| `release` | 仅扩展运行时（含 `src/jb-presets.js`） | 分发给酒馆扩展管理器 |
 
 `release` 分支从 `main` 派生，只做减法，不引入任何 `main` 上不存在的文件。
-在 `main` 上改动运行时代码后，需同步到 `release`：
+在 `main` 上改动运行时代码后，需按运行时 allowlist 同步到 `release`：
 
 ```bash
 git checkout release
-git checkout main -- manifest.json LICENSE README.md \
+git restore --source main --staged --worktree -- manifest.json LICENSE README.md \
   src/index.js src/runtime.js src/Worldbook-Editor.js \
-  src/worldbook-api.js src/ai-prompts.js \
+  src/worldbook-api.js src/ai-prompts.js src/jb-presets.js \
   src/styles/style.css src/styles/host-isolation.css \
-  ui-kit/nvui-api.js ui-kit/tokens.css ui-kit/components.css
+  ui-kit/nvui-api.js ui-kit/tokens.css ui-kit/components.css ui-kit/LICENSE
 git commit -m "chore: 同步运行时代码到 release 分支"
 ```
+
+`docs/`、`test/` 与 `ui-kit/` 的测试资产不同步到 `release`；`LICENSE` 与 `ui-kit/LICENSE` 必须一并同步，不能遗失许可。
 
 ---
 

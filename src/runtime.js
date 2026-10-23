@@ -29,6 +29,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // 破限消息编排：前置区在任务之前，后置区在输出契约之前
   jbPre: [],
   jbPost: [],
+  // 用户另存的自定义预设；元素形状 { id, name, pre, post }，与 layout 分开
+  jbCustomPresets: [],
 });
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
