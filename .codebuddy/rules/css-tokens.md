@@ -9,7 +9,7 @@ paths: src/**/*.css
 
 ## 业务样式 `src/styles/style.css`
 
-- 颜色**只能**用 `var(--nvui-*)` 令牌。令牌定义在 `ui-kit/tokens.css`（dark 110 个 / light 47 个）。
+- 颜色**只能**用 `var(--nvui-*)` 令牌。令牌定义在 `ui-kit/tokens.css`（dark 111 个 / light 47 个）。
 - 禁止出现：`!important`、`#hex` 颜色、`rgb()` / `rgba()` / `hsl()` / `hsla()`、
   `z-index: <数字>`、`position: fixed`、`--SmartTheme`。
 - **所有普通选择器必须以 `#wbe-overlay` 开头**（逗号分隔的每一段都要）。
@@ -29,7 +29,9 @@ paths: src/**/*.css
 
 ## 令牌一致性
 
-- `ui-kit/tokens.json` 必须与 `ui-kit/tokens.css` 完全一致（dark 110/110、light 47/47，值零差异）。
+- `ui-kit/tokens.json` 必须与 `ui-kit/tokens.css` 完全一致（dark 111/111、light 47/47，值零差异）。
+- `--nvui-kit-version`（v2.8.0 新增）是版本可观测令牌，值必须等于 `ui-kit/package.json`
+  的 `version`；`test/ui-contract.test.mjs` 会断言这一条，升级 Kit 时不要手改它的值。
 - 解析陷阱：`.nvui-theme-light` 在**注释里**先出现，做块提取时必须用行首锚定的正则，
   否则会误取 dark 块。
 - `--nvui-tab-ind-{w,h,x,y}` 未在 tokens.css 定义**不是缺陷**——由 `nvui-api.js` 运行时

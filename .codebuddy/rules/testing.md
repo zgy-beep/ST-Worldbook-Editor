@@ -11,8 +11,9 @@ paths: "test/**/*.mjs, ui-kit/test/**/*.js"
 
 | 命令 | 范围 | 数量 | 位置 |
 |---|---|---|---|
-| `npm test` | 扩展自身行为 | 43 | `test/*.test.mjs` |
-| `npm run test:kit` | NVUI Kit 规范守护 | 354 | `ui-kit/test/test-ui-kit.js` |
+| `npm test` | 扩展自身行为 | 73 | `test/*.test.mjs` |
+| `npm run test:kit` | NVUI Kit 规范守护（上游 4 套静态套件） | 规范 367 + API 表面 27 + v2.8.0 功能 + downstream 自检 | `ui-kit/test/test-ui-kit.js` / `test-api-surface.js` / `test-v280-features.js` / `downstream-check.js` |
+| `npm run test:kit:glass` | Kit 玻璃透明感探针（需本机 Chrome，可选） | 12 | `ui-kit/test/st-glass-transparency.js` |
 | `npm run test:browser` | 浏览器端到端 | 1 套 | `test/browser-smoke.mjs` |
 
 `ui-kit/test/` 属于上游 Kit 的自包含测试套件，**扩展业务测试不要往那里加**。

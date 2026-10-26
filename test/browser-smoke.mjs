@@ -199,12 +199,49 @@ try {
   await page.locator('.wbe-row').first().waitFor();
   const desktop = await page.locator('.nvui-panel').boundingBox();
   assert.equal(Math.round(desktop.width),720);
+  // 桌面面板增高：本扩展把 --nvui-panel-max-h 从 Kit 默认 88vh 提到 94vh，
+  // 且关闭 size 持久化（否则旧分辨率存档的 px 高度会把面板压矮）。
+  const desktopHeight = await page.evaluate(() => ({
+    height: document.querySelector('.nvui-panel').getBoundingClientRect().height,
+    inline: document.querySelector('.nvui-panel').style.height,
+    vh: window.innerHeight,
+  }));
+  assert.equal(desktopHeight.inline, '', '面板高度不应被持久化 px 值内联固定');
+  assert.ok(desktopHeight.height >= desktopHeight.vh * 0.9,
+    `桌面面板高度应 ≥ 90vh，实际 ${desktopHeight.height}/${desktopHeight.vh}`);
   assert.ok(await page.locator('.nvui-tabs').isVisible());
   assert.equal(await page.locator('.nvui-bottom-nav').isVisible(),false);
   assert.equal(await page.locator('dialog:modal').count(),0);
   assert.equal(await page.evaluate(()=>typeof window.generateRaw),'undefined');
   assert.equal(await page.evaluate(()=>settings.st_worldbook_editor.style),'保留原有地名');
   await page.screenshot({path:resolve(root,'.test-output/entries.png')});
+
+  // v2.8.0 运行时自检：真实页面里 JS 版本与 tokens.css 必须一致（玻璃自动回退是宿主正常降级，不算异常）
+  const kitCheck = await page.evaluate(() => window.NVUI.selfCheck({ expect: '2.8.0' }));
+  assert.equal(kitCheck.kitVersion, '2.8.0');
+  assert.deepEqual(kitCheck.issues.filter(issue => issue !== 'glass-auto-fallback'), [],
+    `Kit 自检异常：${JSON.stringify(kitCheck.issues)}`);
+
+  // v2.8.0 新增「正文内裸相邻 .nvui-btn 默认 8px」；本扩展按钮都包在 .wbe-bar / .wbe-batch 里，
+  // 由业务 CSS 的 gap 控距，不应被 Kit 的默认 margin 二次加成。
+  const btnSpacing = await page.evaluate(() => {
+    const naked = document.querySelectorAll('.nvui-panel-body > .nvui-btn').length;
+    const btn = document.querySelector('.wbe-bar .nvui-btn');
+    return { naked, margin: btn ? getComputedStyle(btn).marginInlineStart : null };
+  });
+  assert.equal(btnSpacing.naked, 0, 'Kit 默认按钮间距不应命中业务面板正文的裸按钮');
+  assert.equal(btnSpacing.margin, '0px', '业务按钮行由 .wbe-bar 的 gap 控距，不能被 Kit 默认 margin 二次加成');
+
+  // 工具页「查找替换」两行按钮的垂直间距：历史已知问题（两行贴成 0px），已用 .wbe-mt-2 修复。
+  await page.locator('#wbe-tab-tool').click();
+  await page.locator('#wbe-acc-find').waitFor();
+  const toolRowGap = await page.evaluate(() => {
+    const bars = [...document.querySelectorAll('#wbe-acc-find .nvui-acc-inner > .wbe-bar')];
+    if (bars.length < 2) return null;
+    return Math.round(bars[1].getBoundingClientRect().top - bars[0].getBoundingClientRect().bottom);
+  });
+  assert.ok(toolRowGap === null || toolRowGap >= 8, `工具页两行按钮垂直间距应 ≥ 8px，实际 ${toolRowGap}px`);
+  await page.locator('#wbe-tab-entries').click();
 
   // 破限页：前置 / 后置各加一条消息，验证它们进到请求的正确位置
   await page.locator('#wbe-tab-jb').click();
@@ -255,6 +292,43 @@ try {
   await page.locator('#wbe-tab-jb').click();
   assert.ok(await page.evaluate(()=>window.jbNode===document.querySelector('#wbe-jbpre .wbe-jbtext')));
   assert.equal(await page.locator('#wbe-jbpost .wbe-jbtext').first().inputValue(),'结尾重申：按既定尺度输出。');
+
+  // 诊断日志：设置页有图形入口；全局 error 会进缓冲；敏感字段必须脱敏。
+  await page.locator('#wbe-tab-set').click();
+  await page.locator('#wbe-acc-diag .nvui-acc-head').click();
+  assert.ok(await page.locator('#wbe-acc-diag').evaluate(el => el.classList.contains('is-open')),
+    '诊断日志折叠条应能展开');
+  await page.locator('#wbe-loglist').waitFor();
+  assert.ok(await page.evaluate(() => !!window.__wbeLog), '应暴露 __wbeLog 排障入口');
+  const logProbe = await page.evaluate(() => {
+    const log = window.__wbeLog;
+    log.warn('日志冒烟-脱敏 Authorization: Bearer abcdefghijklmnopqrstu', {
+      key: 'sk-smoke-secret-123456789',
+      authorization: 'Bearer abcdefghijklmnopqrstu',
+    });
+    log.error('日志冒烟-error', new Error('smoke-boom'));
+    window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.8.0' } }) };
+  });
+  assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
+  assert.match(logProbe.text, /日志冒烟-未捕获/);
+  assert.match(logProbe.text, /smoke-boom/);
+  assert.ok(!logProbe.text.includes('sk-smoke-secret'), '日志不得包含 API Key 明文');
+  assert.ok(!logProbe.text.includes('abcdefghijklmnopqrstu'), '日志不得包含 Bearer token 明文');
+  assert.ok(logProbe.text.includes('Bearer ***'), 'Bearer token 必须被脱敏');
+  await page.locator('#wbe-loglist .wbe-logrow.is-error').first().waitFor();
+  await page.screenshot({path:resolve(root,'.test-output/diagnostics.png')});
+  // 「详细日志」开关即时切级别并落盘到扩展设置
+  await page.locator('[data-a=logdebug]').click();
+  assert.equal(await page.evaluate(() => window.__wbeLog.getLevel()), 'debug');
+  assert.equal(await page.evaluate(() => settings.st_worldbook_editor.debug), true);
+  await page.locator('[data-a=logdebug]').click();
+  assert.equal(await page.evaluate(() => window.__wbeLog.getLevel()), 'info');
+  // 清空日志（confirm 由 dialog handler 自动接受）
+  await page.locator('[data-a=logclear]').click();
+  assert.equal(await page.evaluate(() => window.__wbeLog.getEntries().length), 0);
+  assert.match(await page.locator('#wbe-logsum').textContent(), /暂无日志/);
+  await page.locator('#wbe-tab-jb').click();
 
   // 新内置模板必须出现在分组下拉里，但不自动套用。
   const templateValue = await page.evaluate(() =>
@@ -581,11 +655,13 @@ try {
   });
   assert.equal(await page.locator('#wbe-menu').count(),0);
   assert.equal(await page.locator('#wbe-layer').count(),0);
+  assert.equal(await page.evaluate(()=>window.__wbeLog),undefined, 'disable 后应收回本扩展的 __wbeLog 排障入口');
   await page.evaluate(async()=>{
     for(const name of ['onActivate','init','activate']) if(typeof extension[name]==='function') {await extension[name]();break;}
   });
   await page.locator('#wbe-menu').waitFor();
   assert.equal(await page.locator('#wbe-menu').count(),1);
+  assert.ok(await page.evaluate(()=>!!window.__wbeLog), '重新启用后应恢复 __wbeLog 排障入口');
   assert.equal(await page.evaluate(()=>localStorage.getItem('wbe_other_plugin')),'preserve');
 
   // 重建面板后，折叠条开合状态应从扩展设置里恢复。

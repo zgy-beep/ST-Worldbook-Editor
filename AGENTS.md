@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.7.0`，宿主最低版本 `1.17.0`。
+当前版本 `0.8.0`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -21,22 +21,26 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
        └─ src/Worldbook-Editor.js   业务与界面，导出 initializeEditor(runtime)
             ├─ src/worldbook-api.js  酒馆助手新旧接口兼容层
             ├─ src/ai-prompts.js     AI 消息拼装与 JSON 解析（不依赖运行时，可被 Node 单测）
-            └─ src/jb-presets.js     破限预设/保存校验纯函数（零运行时，可被 Node 单测）
+            ├─ src/jb-presets.js     破限预设/保存校验纯函数（零运行时，可被 Node 单测）
+            └─ src/logger.js         诊断日志（零 import 叶子模块，可被 Node 单测；index/runtime/editor 共用）
 ```
 
 - `src/index.js` 只管生命周期与菜单，**不写业务 UI**。
 - `src/runtime.js` 是**唯一**允许接触 `SillyTavern.getContext()` 的地方；其他模块通过 runtime 拿能力。
 - `src/ai-prompts.js` 必须保持零运行时依赖，否则 Node 单测跑不起来。
-- `ui-kit/` 是 **NVUI Kit v2.7.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
+- `src/logger.js` 必须保持零 import；日志只存内存、不写宿主存储，敏感字段由 logger 统一脱敏。
+- `ui-kit/` 是 **NVUI Kit v2.8.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
   不要把扩展业务逻辑写进 `ui-kit/`，也不要改它的 `nvui-api.js`。
 
 ## 常用命令
 
 ```bash
 npm test              # 项目测试（扩展自身行为）
-npm run test:kit      # Kit 规范守护（上游 Kit 自包含套件）
+npm run test:kit      # Kit 规范守护（规范 + API 表面 + v2.8.0 功能 + downstream 自检）
 npm run test:browser  # 浏览器端到端冒烟，需额外两个环境变量（见下）
 ```
+
+`npm run test:kit:glass` 是 Kit 上游的玻璃透明感探针（真实 Chrome，可选，不属必跑门禁）。
 
 浏览器冒烟测试**零依赖设计**，本机必须显式指定：
 
@@ -87,6 +91,16 @@ npm run test:browser
 - 动态内容需转义；高危正则（ReDoS）需拦截；路径需过滤穿越。
 - AI 结果必须与来源世界书绑定，防止串写。
 
+### 6. 日志与隐私
+
+- 运行时日志一律走 `getLogger().child(scope)`，**不要**在 `src/` 里直接 `console.*`（logger 内部的控制台镜像除外）。
+- 日志只存**内存环形缓冲**（默认 300 条），**不写** `localStorage` / `extensionSettings` / 文件，不上传。
+- **绝不**把 API Key、`Authorization`、token、世界书正文、聊天文本、提示词原文传给 logger；字段名匹配与 `sk-…` / `Bearer …`
+  文本由 logger 兜底脱敏，但调用方仍只能传元信息（模型名、条数、长度、uid 等）。
+- 页面级未捕获异常由 `src/index.js` 的 `captureGlobalErrors()` 记录；`window.__wbeLog` 是 DevTools 排障入口，disable 时必须收回本扩展的值。
+- 面板高度契约：`createPanel({ persist: { size: false } })` + `#wbe-overlay .nvui-panel { --nvui-panel-max-h: 94vh }`；
+  不要重新打开 size 持久化（旧分辨率的 px 存档会把面板压矮），也不要改 `ui-kit/` 里的默认 88vh。
+
 ## 分支约定
 
 | 分支 | 内容 | 用途 |
@@ -98,11 +112,29 @@ npm run test:browser
 
 ### 已落地的关键改造（改动前务必先 `git status` 确认是否仍然成立）
 
-- **Kit 已升级到 v2.7.0（2026-10-23）**：内置上游 `v2.7.0` 标签资产；
-  上游 #12（`optgroup`）、#13（焦点）、#14（宿主模态 Esc）均已修复并关闭。
-  `.nvui-form-scope` 是自定义普通容器的 opt-in 表单隔离；本扩展的标准面板已在默认载体内，
-  不需要额外添加该类。升级追补验收记录见 `docs/kit-integration-audit.md`。
-  Kit 浏览器套件曾偶发半选 checkbox 过渡样式断言失败，见上游 issue #15。
+- **Kit 已升级到 v2.8.0（2026-10-26）**：内置上游 `v2.8.0` 标签资产（提交
+  `012653a7dc2cb50e97ca319d59a1760596b43207`），78 个文件与上游逐文件 SHA256 一致。
+  v2.8.0 是 MINOR（additive）：新增 `NVUI.selfCheck` / `checkCompatibility` / `defaults`、
+  `--nvui-kit-version` 与 `data-nvui-version`、`.nvui-actions`、正文相邻按钮默认 8px 间距、
+  `createPanel({ glass: 'auto'|'force'|'solid' })` 与 `panel.setGlassMode()/getGlassState()`；
+  token 111/47、组件类 81、`!important` 预算 18（只新增 force 玻璃块）。
+  该标签同时含 v2.7.1（上游 #15 浏览器回归稳定性）与 v2.7.2（玻璃透明感增强、宿主禁模糊时
+  97% 近不透明回退、探测三态自愈；回退类由 `.nvui-solid` 改为 `.nvui-glass-fallback`）。
+  本扩展业务 DOM 未依赖被改语义（`.nvui-solid` / 回退类），无需迁移。
+  `.nvui-form-scope` 仍是自定义普通容器的 opt-in 表单隔离；本扩展的标准面板已在默认载体内，
+  不需要额外添加该类。升级验收记录见 `docs/kit-integration-audit.md`。
+- **Kit 自检接入启动流程（v2.8.0）**：`src/index.js` 的 `ensureNVUI()` 在拿到本地 Kit 后调用
+  `NVUI.selfCheck({ expect: KIT_VERSION })`，版本漂移 / CSS 未加载会 `console.warn` 报出；
+  `glass-auto-fallback` 是宿主 Fast UI 的正常降级，已忽略。`KIT_VERSION` / `Worldbook-Editor.js`
+  的版本守卫字面量由 `test/ui-contract.test.mjs` 与 `ui-kit/package.json` 交叉校验，升级 Kit
+  必须同步这三处。
+- **诊断日志系统（2026-10-26）**：`src/logger.js` 零依赖叶子模块（`debug/info/warn/error`、300 条环形缓冲、
+  detail 白名单序列化 + 敏感字段 / 密钥文本脱敏、`exportText` 环境快照、`subscribe`、`captureGlobalErrors`）；
+  `index.js` / `runtime.js` / `Worldbook-Editor.js` 统一接入，设置页新增「诊断日志与排障」折叠条
+  （复制 / 下载 / 清空 / 详细日志开关），`window.__wbeLog` 是 DevTools 排障入口；
+  单测 `test/logger.test.mjs`（13 条）+ `ui-contract.test.mjs` 静态守卫 + 浏览器冒烟覆盖脱敏与全局异常。
+- **桌面面板增高**：`createPanel` 关闭 `persist.size`，业务作用域内把 `--nvui-panel-max-h` 从
+  Kit 默认 `88vh` 提到 `94vh`；浏览器冒烟断言桌面高度 ≥ 90vh、无内联 px 高度。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

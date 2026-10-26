@@ -13,7 +13,7 @@ const trackedFiles = () => execSync('git ls-files --cached --others --exclude-st
 
 test('extension manifest references local assets and exported lifecycle hooks',async()=>{
   const manifest=JSON.parse(read('manifest.json'));
-  assert.equal(manifest.version,'0.7.0');
+  assert.equal(manifest.version,'0.8.0');
   for(const key of ['js','css']) assert.ok(existsSync(new URL('../'+manifest[key],import.meta.url)));
   const source=read(manifest.js);
   for(const hook of Object.values(manifest.hooks)) assert.match(source,new RegExp(`export (?:async )?function ${hook}\\(`));
@@ -54,10 +54,57 @@ test('host isolation layer is scoped, token-only, and the only place allowed to 
   assert.match(stripComments(read('src/styles/style.css')),/@import\s+url\(['"]?\.?\/host-isolation\.css['"]?\)/);
 });
 
-test('Kit version and desktop geometry match the requested 2.7.0 standard',()=>{
-  assert.equal(JSON.parse(read('ui-kit/package.json')).version,'2.7.0');
+test('Kit version and desktop geometry match the requested 2.8.0 standard',()=>{
+  const kitVersion=JSON.parse(read('ui-kit/package.json')).version;
+  assert.equal(kitVersion,'2.8.0');
   assert.match(read('ui-kit/tokens.css'),/--nvui-panel-width:\s*720px/);
+  // v2.8.0 新增 --nvui-kit-version 令牌，必须与 package.json 同版本
+  assert.match(read('ui-kit/tokens.css'),new RegExp(`--nvui-kit-version:\\s*["']?${kitVersion.replace(/\./g,'\\.')}`));
+  // 业务侧的 Kit 版本守卫不能漂移：升级 Kit 时必须同步 index.js / Worldbook-Editor.js
+  for(const file of ['src/index.js','src/Worldbook-Editor.js']) {
+    assert.match(read(file),new RegExp(`['"]${kitVersion.replace(/\./g,'\\.')}['"]`),`${file} 的 Kit 版本守卫未同步到 ${kitVersion}`);
+  }
   assert.doesNotMatch(read('src/Worldbook-Editor.js'),/cdn\.jsdelivr|2147483647|showModal\(/);
+});
+
+test('Kit v2.8.0 self-check is wired into the bootstrap',()=>{
+  const source=read('src/index.js');
+  assert.match(source,/const KIT_VERSION = '2\.8\.0'/);
+  // 运行时自检：版本 / CSS / 玻璃回退一次性诊断
+  assert.match(source,/selfCheck\(/);
+  assert.match(source,/expect:\s*KIT_VERSION/);
+  // 玻璃自动回退是宿主正常降级，不能当成异常反复告警
+  assert.match(source,/KIT_SELF_CHECK_IGNORED_ISSUES/);
+});
+
+test('diagnostic logger is a zero-dependency leaf wired into bootstrap and settings UI',()=>{
+  const loggerSource=read('src/logger.js');
+  // 叶子模块：不得 import 任何东西（Node 单测 / 无宿主环境都要能加载）
+  assert.doesNotMatch(loggerSource,/^\s*import\s/m);
+  // 脱敏红线：敏感字段名 + 运行时密钥形态
+  assert.match(loggerSource,/SENSITIVE_KEY/);
+  for(const pattern of ['api[-_]?key','authorization','Bearer','sk-']) {
+    assert.ok(loggerSource.includes(pattern),`日志脱敏缺少 ${pattern}`);
+  }
+  // 三个运行时模块统一走 logger，不再各自裸 console
+  for(const file of ['src/index.js','src/runtime.js','src/Worldbook-Editor.js']) {
+    assert.match(read(file),/from '\.\/logger\.js'/,`${file} 未接入 logger`);
+  }
+  // 入口：全局异常捕获 + DevTools 排障句柄
+  const indexSource=read('src/index.js');
+  assert.match(indexSource,/captureGlobalErrors/);
+  assert.match(indexSource,/__wbeLog/);
+  // 运行时给日志导出提供宿主版本快照
+  assert.match(read('src/runtime.js'),/export function getHostInfo/);
+  // 设置页：诊断日志折叠条 + 四个动作
+  const editorSource=read('src/Worldbook-Editor.js');
+  assert.match(editorSource,/wbe-acc-diag/);
+  for(const action of ['logcopy','logsave','logclear','logdebug']) {
+    assert.match(editorSource,new RegExp(`data-a="${action}"`));
+  }
+  // 面板增高契约：关闭 size 持久化（防旧 px 存档压矮）+ 业务作用域内把高度 token 提到 94vh
+  assert.match(editorSource,/persist: \{ size: false/);
+  assert.match(stripComments(read('src/styles/style.css')),/--nvui-panel-max-h:\s*94vh/);
 });
 
 test('form controls reuse Kit components instead of re-skinning them',()=>{

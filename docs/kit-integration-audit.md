@@ -1,5 +1,21 @@
 # NVUI Kit 集成审计
 
+## v2.8.0 验收（2026-10-26）
+
+- 内置 Kit 已同步上游 `v2.8.0` 标签（附注 tag 指向提交 `012653a7dc2cb50e97ca319d59a1760596b43207`，提交标题 `feat: v2.8.0 downstream DX, defaults and Fast UI glass modes`）。`ui-kit/` 全量 **78 个文件**（含新增 `scripts/`、`.github/workflows/ci.yml`、`UPGRADING.md`、`MIGRATION-v2.md`、4 个新测试）与本机 `git checkout v2.8.0` 工作树**逐文件 SHA256 一致（78/78，0 mismatch）**；上游已删除的 `RELEASE_PLAN_v2.7.0.md` 同步移除。
+- 上游 v2.7.0 → v2.8.0 规模：`nvui-api.js` +416 行、`components.css` +211 行、`README.md` 大幅重写、`package.json` 新增 5 个脚本；新增 `test-api-surface.js`（27 顶层导出冻结）、`test-v280-features.js`、`downstream-check.js`（下游 4 资产自检）、`st-glass-transparency.js`（玻璃透明感探针）。
+- 该标签同时包含 **v2.7.1**（上游 #15：表单浏览器回归把固定 250ms 等待改为轮询最终计算值）与 **v2.7.2**（玻璃透明感增强：面板态 30% 底 + 48px 背后模糊；宿主禁模糊时改为 `--nvui-bg-2` 97% 近不透明 `.nvui-glass-fallback`；`detectGlassSupport()` 三态自愈；`setTheme()` 不再无条件清除用户手动加的 `.nvui-solid`）。
+- 运行资产一致性：`node ui-kit/test/downstream-check.js` 8/8 PASS、exit 0（`NVUI.version` / `tokens.css` / `tokens.json` / `package.json` 均 2.8.0，token 111/47，`!important` 18，Node 侧可加载）。
+- Kit 静态门禁：`test-ui-kit.js` **367/367**；`test-api-surface.js` 27 顶层导出冻结通过；`test-v280-features.js` 8/8；玻璃透明感探针 `st-glass-transparency.js` 12/12（本机 headless Chrome，报告 `ui-kit/test/out/glass-transparency/report.json`，该目录已 gitignore）。
+- 扩展集成验证：`npm test` **59/59**；浏览器冒烟通过，并新增两条 v2.8.0 契约断言：
+  1. 真实页面 `window.NVUI.selfCheck({ expect: '2.8.0' })` 除允许的 `glass-auto-fallback` 外无 issue（版本 / CSS 一致性）；
+  2. v2.8.0 新增的「正文裸相邻 `.nvui-btn` 默认 8px」未命中本扩展：`.nvui-panel-body > .nvui-btn` 数量为 0，`.wbe-bar` 内按钮 `margin-inline-start` 计算值为 `0px`（间距仍由业务 `.wbe-bar` 的 `gap` 控制，没有双倍）。
+- 业务侧同步：`src/index.js` 新增 `KIT_VERSION = '2.8.0'` 与 `logKitSelfCheck()`（`ensureNVUI()` 拿到本地 Kit 后调 `NVUI.selfCheck`，版本漂移 / CSS 未加载 → `console.warn`；`glass-auto-fallback` 是宿主 Fast UI 正常降级，已忽略，仅 `NVUI.config.debug` 打开时输出通过详情）；`src/Worldbook-Editor.js` 版本守卫、`style.css` / `host-isolation.css` / `runtime.js` 版本注释、`ui-contract.test.mjs` 版本断言同步；`package.json` 的 `test:kit` 扩为「规范 + API 表面 + v2.8.0 功能 + downstream 自检」四套。
+- 兼容性结论：本扩展未使用语义被改的 `.nvui-solid` / 玻璃回退类；`createPanel` 未传 `glass`（默认 `auto`，行为与 v2.7 的 Fast UI 降级一致）；持久化状态格式未变，`runtime.layoutStorage` 契约不变。v2.8.0 的 `.nvui-actions` / `defaults` / `checkCompatibility` / `glass: force` / `--nvui-kit-version` 业务侧暂未采用（`selfCheck` 已接入），属后续迭代候选。
+- 顺手修复：工具页「全书查找替换」两行按钮垂直间距 `0px` 的历史已知问题 —— `src/Worldbook-Editor.js` 第二行 `.wbe-bar` 补 `wbe-mt-2`（`8px`），浏览器冒烟新增 `≥8px` 断言；旧版本审计里「下一步 1」至此完成。
+- 同期业务改造（不属 Kit 上游）：新增诊断日志系统（`src/logger.js` + 设置页「诊断日志与排障」+ `window.__wbeLog`，见 `docs/diagnostics-logging.md`）；桌面面板增高（关闭 `persist.size` + 业务作用域内把 `--nvui-panel-max-h` 由 88vh 提到 94vh，仅覆盖 token、不改 `ui-kit/`）。
+- 边界：`.github/`、`scripts/`、`test/` 属上游自包含开发资产，只留在 `main`；`release` 分支仍只同步 4 个运行资产 + `LICENSE`。本轮未在真实 SillyTavern 宿主（T:/Github/SillyTavern/APP/SillyTavern）里跑实机回归，验证范围是 Node 套件 + 本地浏览器冒烟 + Kit 自带 headless Chrome 探针。
+
 ## v2.7.0 追补验收（2026-10-23）
 
 - 内置 Kit 已同步上游 `v2.7.0` 标签（提交 `4d0251d27f91cb3a4e579141fb3915895a7380bc`），包含 `.nvui-form-scope` 与 #12–#14 修复；本扩展位于默认 Kit 面板载体中，无需给业务容器添加 opt-in 类。

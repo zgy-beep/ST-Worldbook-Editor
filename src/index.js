@@ -8,14 +8,33 @@
  */
 
 import { initializeEditor } from './Worldbook-Editor.js';
+import { captureGlobalErrors, getLogger } from './logger.js';
 import { createRuntime } from './runtime.js';
 
 const LABEL = '世界书编辑器';
 const MENU_ID = 'wbe-menu';
+/** 期望的内置 ui-kit 版本；必须与 ui-kit/package.json 一致（test/ui-contract.test.mjs 会交叉校验）。 */
+const KIT_VERSION = '2.8.0';
+/** 宿主开启 Fast UI / 关闭模糊时 Kit 会自动降级玻璃，这是正常降级，不算自检异常。 */
+const KIT_SELF_CHECK_IGNORED_ISSUES = new Set(['glass-auto-fallback']);
 const MENU_RETRY_MS = 1000;
 const MENU_RETRY_LIMIT = 30;
 const HELPER_NOTICE_DELAY = 2000;
 const HELPER_MISSING_MESSAGE = '未检测到酒馆助手（Tavern Helper / JS-Slash-Runner），或它尚未就绪。请先在「扩展」中安装并启用酒馆助手，然后刷新页面。';
+
+const log = getLogger().child('lifecycle');
+
+// 页面级未捕获异常也写进诊断日志（模块加载时安装；扩展 disable 后不注销，
+// 便于排查清理阶段/Runtime 异步回包阶段才暴露的异常）。
+captureGlobalErrors(getLogger().child('global'));
+
+/**
+ * 控制台排障入口：可在 DevTools 里直接 `__wbeLog.exportText()` 取日志、
+ * `__wbeLog.setLevel('debug')` 临时开详细日志；不替代设置页的图形入口。
+ */
+function exposeLogHandle() {
+  try { globalThis.__wbeLog = getLogger(); } catch { /* 忽略 */ }
+}
 
 let runtime = null;
 let editor = null;
@@ -52,7 +71,7 @@ function getHostContext() {
       if (context && typeof context === 'object') return context;
     }
   } catch (err) {
-    console.warn('[ST-Worldbook-Editor] 读取 SillyTavern.getContext() 失败', err);
+    log.warn('读取 SillyTavern.getContext() 失败', err);
   }
   return null;
 }
@@ -79,7 +98,7 @@ function registerAppReady() {
     source.on(ready, appReadyHandler);
     return true;
   } catch (err) {
-    console.warn('[ST-Worldbook-Editor] 注册 APP_READY 监听失败', err);
+    log.warn('注册 APP_READY 监听失败', err);
     appReadySource = null;
     appReadyEvent = 'app_ready';
     appReadyHandler = null;
@@ -96,7 +115,7 @@ function detachAppReady() {
       try {
         remove.call(appReadySource, appReadyEvent, appReadyHandler);
       } catch (err) {
-        console.warn('[ST-Worldbook-Editor] 移除 APP_READY 监听失败', err);
+        log.warn('移除 APP_READY 监听失败', err);
       }
     }
   }
@@ -107,6 +126,7 @@ function detachAppReady() {
 
 function onAppReady() {
   appReady = true;
+  log.info('收到 APP_READY 事件');
   void start().then(() => {
     if (pendingOpen) {
       pendingOpen = false;
@@ -128,6 +148,28 @@ function getGlobalNVUI() {
 }
 
 /**
+ * NVUI Kit v2.8.0 新增运行时自检：一次返回版本漂移 / CSS 未加载 / 玻璃回退等诊断。
+ * 结果写进诊断日志（控制台同步镜像）、不打断启动、不进用户界面；`glass-auto-fallback`
+ * 是宿主 Fast UI 下的正常降级，已列入忽略项（只有 `api.config.debug` 打开时才记录通过详情）。
+ */
+function logKitSelfCheck(api) {
+  if (typeof api.selfCheck !== 'function') return;
+  try {
+    const result = api.selfCheck({ expect: KIT_VERSION });
+    const issues = Array.isArray(result?.issues)
+      ? result.issues.filter(issue => !KIT_SELF_CHECK_IGNORED_ISSUES.has(issue))
+      : [];
+    if (issues.length > 0) {
+      log.warn('NVUI Kit 自检异常', { issues, result });
+    } else if (api.config?.debug) {
+      log.debug('NVUI Kit 自检通过', result);
+    }
+  } catch (err) {
+    log.warn('NVUI Kit 自检执行失败', err);
+  }
+}
+
+/**
  * 加载本地 Kit API。Kit 是 UMD：import 执行后会挂到 globalThis.NVUI。
  * 若进入前已有其它插件注册的全局实例，加载完本地副本后恢复它，
  * 避免把别人的全局引用替换成本扩展的副本；本扩展自己持有本地实例。
@@ -144,23 +186,26 @@ async function ensureNVUI() {
       await import('../ui-kit/nvui-api.js');
       loaded = getGlobalNVUI();
     } catch (err) {
-      console.error('[ST-Worldbook-Editor] 本地 NVUI Kit 加载失败', err);
+      log.error('本地 NVUI Kit 加载失败', err);
     }
 
     if (prior && (typeof prior === 'object' || typeof prior === 'function')) {
       try {
         globalThis.NVUI = prior;
       } catch (err) {
-        console.warn('[ST-Worldbook-Editor] 恢复其它插件的 NVUI 全局实例失败', err);
+        log.warn('恢复其它插件的 NVUI 全局实例失败', err);
       }
       if (!isNVUI(loaded) && isNVUI(prior)) loaded = prior;
     }
 
     if (!isNVUI(loaded)) {
-      throw new Error('NVUI Kit 2.7.0 未就绪：请确认 ui-kit/nvui-api.js 与 style.css 已随扩展安装');
+      throw new Error(`NVUI Kit ${KIT_VERSION} 未就绪：请确认 ui-kit/nvui-api.js 与 style.css 已随扩展安装`);
     }
 
     nvui = loaded;
+    log.info('本地 NVUI Kit 已加载', { version: loaded.version || null, kitVersion: KIT_VERSION });
+    logKitSelfCheck(loaded);
+    exposeLogHandle();
     return nvui;
   })().finally(() => {
     nvuiLoading = null;
@@ -179,7 +224,7 @@ function notify(message, type = 'info') {
       api.showToast({ message: full, type });
       return;
     } catch (err) {
-      console.warn('[ST-Worldbook-Editor] NVUI toast 失败', err);
+      log.warn('NVUI toast 失败', err);
     }
   }
 
@@ -195,10 +240,10 @@ function notify(message, type = 'info') {
       }
     }
   } catch (err) {
-    console.warn('[ST-Worldbook-Editor] toastr 回退失败', err);
+    log.warn('toastr 回退失败', err);
   }
 
-  console.warn(`[ST-Worldbook-Editor] ${text}`);
+  log.warn(String(text));
 }
 
 function hasHelper() {
@@ -281,7 +326,7 @@ function ensureMenuButton() {
       return;
     }
     if (menuRetryCount >= MENU_RETRY_LIMIT) {
-      console.warn('[ST-Worldbook-Editor] 未找到 #extensionsMenu，扩展菜单入口暂未挂载');
+      log.warn('未找到 #extensionsMenu，扩展菜单入口暂未挂载');
       clearMenuRetry();
     }
   }, MENU_RETRY_MS);
@@ -330,6 +375,8 @@ function start() {
   if (starting) return starting;
 
   const expectedGeneration = generation;
+  exposeLogHandle();
+  log.info('开始启动扩展');
 
   const promise = (async () => {
     try {
@@ -337,11 +384,12 @@ function start() {
       if (expectedGeneration !== generation) return;
 
       runtime = createRuntime({ NVUI: api });
+      log.info('宿主运行时已就绪', { kitVersion: api.version || null });
 
       try {
         runtime.getSettings();
       } catch (err) {
-        console.error('[ST-Worldbook-Editor] 读取扩展设置失败', err);
+        log.error('读取扩展设置失败', err);
         notify(`读取扩展设置失败：${err?.message || err}`, 'danger');
         return;
       }
@@ -355,10 +403,12 @@ function start() {
       try {
         await ensureEditor(expectedGeneration);
       } catch (err) {
-        console.error('[ST-Worldbook-Editor] 初始化编辑器失败', err);
+        log.error('初始化编辑器失败', err);
         notify(`编辑器初始化失败：${err?.message || err}`, 'danger');
       }
       if (expectedGeneration !== generation) return;
+
+      log.info('编辑器初始化完成');
 
       // 放在 initializeEditor 之后：编辑器初始化过程若清理旧 DOM，不应把入口菜单一起带走。
       ensureMenuButton();
@@ -375,6 +425,7 @@ function start() {
       }
 
       started = true;
+      log.info('扩展启动完成', { menuMounted: !!menuButton, helperReady: hasHelper() });
 
       if (helperCheckTimer) clearTimeout(helperCheckTimer);
       helperCheckTimer = setTimeout(() => {
@@ -383,7 +434,7 @@ function start() {
         if (!hasHelper()) notify(HELPER_MISSING_MESSAGE, 'warn');
       }, HELPER_NOTICE_DELAY);
     } catch (err) {
-      console.error('[ST-Worldbook-Editor] 启动失败', err);
+      log.error('启动失败', err);
       notify(`启动失败：${err?.message || err}`, 'danger');
     }
   })().finally(() => {
@@ -397,6 +448,7 @@ function start() {
 async function openEditor() {
   if (!appReady) {
     pendingOpen = true;
+    log.info('酒馆尚未就绪，面板打开请求已挂起，等待 APP_READY');
     if (!registerAppReady()) {
       notify('酒馆尚未完成初始化，暂时无法打开编辑器；请刷新页面后重试。', 'info');
     }
@@ -414,15 +466,17 @@ async function openEditor() {
   try {
     const instance = await ensureEditor(generation);
     if (!instance) return;
+    log.info('打开编辑器面板');
     await instance.open();
   } catch (err) {
-    console.error('[ST-Worldbook-Editor] 打开面板失败', err);
+    log.error('打开面板失败', err);
     notify(`打开面板失败：${err?.message || err}`, 'danger');
   }
 }
 
 async function cleanup() {
   generation += 1;
+  log.info('清理扩展实例（disable / pagehide）');
 
   clearMenuRetry();
   if (helperCheckTimer) {
@@ -447,7 +501,7 @@ async function cleanup() {
       if (menuKeyHandler) menuButton.removeEventListener('keydown', menuKeyHandler);
       menuButton.remove();
     } catch (err) {
-      console.warn('[ST-Worldbook-Editor] 移除扩展菜单失败', err);
+      log.warn('移除扩展菜单失败', err);
     }
   }
   menuButton = null;
@@ -465,7 +519,7 @@ async function cleanup() {
     try {
       await currentEditor.destroy?.();
     } catch (err) {
-      console.warn('[ST-Worldbook-Editor] 销毁编辑器失败', err);
+      log.warn('销毁编辑器失败', err);
     }
   }
 
@@ -519,6 +573,13 @@ async function cleanup() {
     capturedPreviousOpen = false;
     previousOpen = undefined;
   }
+
+  // 只收回本扩展自己挂的排障入口，避免误删其它插件/用户的值。
+  try {
+    if (globalThis.__wbeLog === getLogger()) delete globalThis.__wbeLog;
+  } catch {
+    /* 忽略 */
+  }
 }
 
 /** manifest.json 的 hooks.activate。重复调用不会重复注册菜单或面板。 */
@@ -526,7 +587,7 @@ export function init() {
   if (appReady) return start();
 
   if (!registerAppReady()) {
-    console.warn('[ST-Worldbook-Editor] 暂时无法注册 APP_READY 监听，将在钩子下次调用时重试');
+    log.warn('暂时无法注册 APP_READY 监听，将在钩子下次调用时重试');
     return Promise.resolve();
   }
 
@@ -545,6 +606,8 @@ export { openEditor as open };
 
 // 尽早挂 APP_READY 监听：即使宿主版本没有调用 activate 钩子，也能在就绪后启动。
 const registeredAtImport = registerAppReady();
+exposeLogHandle();
+log.info('扩展入口模块已加载', { appReadyRegistered: registeredAtImport });
 if (!registeredAtImport) {
-  console.warn('[ST-Worldbook-Editor] 模块加载时未注册 APP_READY，activate 钩子会再试一次');
+  log.warn('模块加载时未注册 APP_READY，activate 钩子会再试一次');
 }

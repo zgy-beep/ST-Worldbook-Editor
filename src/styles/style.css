@@ -1,7 +1,7 @@
 /**
- * 世界书编辑器 v0.7.0 · 业务样式
+ * 世界书编辑器 v0.8.0 · 业务样式
  * ------------------------------------------------------------------
- * 设计基底：本地 SillyTavern NVUI Kit v2.7.0。
+ * 设计基底：本地 SillyTavern NVUI Kit v2.8.0。
  * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
  *
  * 约束（本文件）：
@@ -554,4 +554,81 @@
     #wbe-overlay .wbe-grid2.is-auto {
         grid-template-columns: minmax(0, 1fr) auto;
     }
+}
+
+/* ==========================================================================
+ * 8. 桌面面板增高 + 诊断日志列表
+ * ========================================================================== */
+
+/* Kit 默认 --nvui-panel-max-h: 88vh；本扩展双栏条目 / 破限编排信息密度高，
+ * 在同一面板作用域内把该 token 提到 94vh（手机端 Kit 用固定 92dvh 抽屉，不受影响）。
+ * createPanel 已关闭 size 持久化，避免旧分辨率存档的 px 高度把面板压矮。 */
+#wbe-overlay .nvui-panel {
+    --nvui-panel-max-h: 94vh;
+}
+
+/* 诊断日志：唯一滚动层仍是 Kit 的 .nvui-panel-body，这里不造第二滚动层，
+   只限制渲染条数（业务侧 LOG_RENDER_LIMIT = 40）。 */
+#wbe-overlay .wbe-loglist {
+    display: block;
+    margin-top: var(--nvui-space-15);
+}
+
+#wbe-overlay .wbe-logrow {
+    display: flex;
+    align-items: baseline;
+    gap: var(--nvui-space-15);
+    padding: var(--nvui-space-1) 0;
+    border-bottom: 1px solid var(--nvui-glass-line);
+    font-size: var(--nvui-fs-xs);
+    line-height: var(--nvui-lh-tight);
+    word-break: break-word;
+}
+
+#wbe-overlay .wbe-logrow:last-child {
+    border-bottom: none;
+}
+
+#wbe-overlay .wbe-logtime {
+    flex: 0 0 auto;
+    color: var(--nvui-text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+#wbe-overlay .wbe-loglv {
+    flex: 0 0 auto;
+    font-weight: 600;
+}
+
+#wbe-overlay .wbe-logrow.is-error .wbe-loglv {
+    color: var(--nvui-danger);
+}
+
+#wbe-overlay .wbe-logrow.is-warn .wbe-loglv {
+    color: var(--nvui-warn);
+}
+
+#wbe-overlay .wbe-logrow.is-info .wbe-loglv {
+    color: var(--nvui-info);
+}
+
+#wbe-overlay .wbe-logrow.is-debug .wbe-loglv {
+    color: var(--nvui-text-3);
+}
+
+#wbe-overlay .wbe-logscope {
+    flex: 0 0 auto;
+    color: var(--nvui-text-3);
+}
+
+#wbe-overlay .wbe-logmsg {
+    flex: 1 1 auto;
+    color: var(--nvui-text);
+}
+
+#wbe-overlay .wbe-logdetail {
+    display: block;
+    color: var(--nvui-text-3);
+    font-size: var(--nvui-fs-2xs);
+    white-space: pre-wrap;
 }

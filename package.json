@@ -1,11 +1,12 @@
 {
   "name": "st-worldbook-editor",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "test:kit": "node ui-kit/test/test-ui-kit.js",
+    "test:kit": "node ui-kit/test/test-ui-kit.js && node ui-kit/test/test-api-surface.js && node ui-kit/test/test-v280-features.js && node ui-kit/test/downstream-check.js",
+    "test:kit:glass": "node ui-kit/test/st-glass-transparency.js",
     "test:browser": "node test/browser-smoke.mjs"
   }
 }

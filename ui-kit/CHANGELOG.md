@@ -6,6 +6,66 @@
 - 新增组件 / 新增 token（不破坏既有 DOM 与取值）：小版本（2.x.0）
 - 重命名类 / token、删除 token、修改 DOM 契约：大版本（x.0.0）
 
+## v2.8.0（2026-10-26）· 下游 DX + 组件默认值 + Fast UI 玻璃模式（MINOR）
+
+> 小版本，additive：新增 3 个顶层导出（`selfCheck` / `checkCompatibility` / `defaults`）与面板控制器方法；新增 `--nvui-kit-version`、`.nvui-actions`、`glass` 模式；无删除/改名。下游覆盖 4 个运行资产即可升级。
+
+### 新增
+
+- **运行时自检**：`NVUI.selfCheck({ expect })` 返回 `kitVersion/cssLoaded/glass/carrierZ/hostModalCount/tokens/issues`；`NVUI.checkCompatibility({ min, max })` 做 semver 区间判断；Node 无 DOM 安全返回 `no-dom`。
+- **版本可观测**：`tokens.css` 新增 `--nvui-kit-version`（深色 110→111）；`createPanel` / `showToast` 的载体与 `documentElement` 写 `data-nvui-version`。
+- **组件默认值**：`NVUI.defaults` 冻结对象；`switchRow/inputRow/accordion/progress/showToast` 缺 label/title/message 时 `warnOnce`。
+- **默认间距**：正文内裸相邻 `.nvui-btn` 默认 8px；`.nvui-actions` 新增按钮组容器（组件类 80→81）；`.nvui-btn-row` / footer 内不双倍。
+- **Fast UI 玻璃模式**：`createPanel({ glass: 'auto' | 'force' | 'solid' })`，默认 `auto`；控制器 `panel.setGlassMode()` / `panel.getGlassState()`；`force` 仅面板级 opt-in，用 4 条作用域 `!important` 覆盖宿主 `body.no-blur`，并在减少透明度 / 强制颜色 / 不支持浏览器时回退；不提供全局 setter。
+
+### 工具 / 发布
+
+- `npm run sync:template`（4 资产 + md5）、`npm run verify:release`、`npm run pack`（zip + SHA256SUMS + manifest.json）、`npm run downstream:check`。
+- API 表面冻结测试（27 顶层导出 + 控制器方法）、CI 门禁、`UPGRADING.md` / `MIGRATION-v2.md`。
+
+### 兼容性
+
+- token 110→111（仅 `--nvui-kit-version`）、组件类 80→81（`.nvui-actions`）、`!important` 14→18（仅 force 块）；其余数字契约不变。
+- `glass` 默认 `auto`，不改变现有 Fast UI 回退行为；`force` 由插件显式选择并可在设置中关闭。
+- 面板态仍是视觉优先档；严格 AA 用 `.nvui-solid`。
+
+## v2.7.2（2026-10-26）· 玻璃透明感修复（PATCH）
+
+> 补丁版本：不改 token 取值/数量（110/47）、组件类（80）、关键帧（16）、`!important` 预算（14）、公开 API 签名与持久化状态格式；下游覆盖 4 个运行资产即可升级。
+
+### 修复
+
+- **面板玻璃态增强（透明度 + 背后模糊）**：面板态单独使用更透的玻璃——遮罩 `color-mix(--nvui-bg 20%)` + `blur(24px)`；面板 `color-mix(--nvui-bg 30%)` + 顶部 token 柔光 + `blur(48px) saturate(190%) brightness(1.12)`（浅色 62% 底；窄屏降档）。面板背后的聊天内容明显可见且被强模糊，符合「透明 + 背后模糊 = 玻璃」的定义。**只改 `.is-panel` 面板态，不影响弹窗/吐司等其它玻璃表面**；token 数量/取值与 AA 金标准均不变。面板态为视觉优先档（极亮宿主下不承诺 text-2 AA），严格 AA 用 `.nvui-solid`。
+- **宿主禁用模糊时改为近不透明回退**：`syncGlassFallback()` 不再整块加 `.nvui-solid`，改为在根节点加 `.nvui-glass-fallback`，CSS 用 `color-mix(in srgb, var(--nvui-bg-2) 97%, transparent)` 生成 97% 不透明底色（无新 token）。深色 text/text-2 = 13.23/6.02、浅色 12.88/6.42，**AA 双达标**；有效宿主透出约 1.1% / 2.1%，保留极轻玻璃感。`.nvui-solid` 只保留为用户主动实心（优先级更高）。**真实 ST 实机验证发现 0.80 半透明档在聊天文本密集背景下有可读重影，因此收紧到 97%**；不支持 `color-mix` 的浏览器退回 0.80 半透明 strong 档。
+- **面板玻璃作用域提升**：面板/遮罩玻璃规则增加 `dialog.nvui-tl` 作用域副本（更高 specificity）。真实 ST 中多个扩展可能各自内嵌不同版本的 kit CSS，旧 `.nvui-panel` 会按加载顺序覆盖新版；作用域提升后新版玻璃在真实的「多扩展共存」环境中也能生效（实机已复现并验证）。
+- **玻璃探测三态化 + 可逆自愈**：`detectGlassSupport()` 内部区分 `supported` / `unsupported` / `unknown`；kit CSS 未就绪时返回 `true`（不落回退）并安排有限次重探（签名含根/body class、`prefers-reduced-transparency`、CSS 是否就绪、用户实心偏好；时机含定时器、`load`、`fonts.ready`、`openLayer()`）。探测前临时摘掉 `.nvui-solid` / `.nvui-glass-fallback`，修掉「探针被自身降级规则压成 `none` → 永久缓存 false → `{force:true}` 也救不回」的死锁；恢复支持后自动移除回退。
+- **反向缺陷**：`openLayer()` 打开浮层时重探一次，修复「面板创建后才开启 Fast UI / 修改减少透明度」导致的「半透明但无模糊」重影。
+- **`setTheme()` 语义**：不再无条件清除 `.nvui-solid`（用户的实心偏好在切主题时保留）；只有显式传 `options.solid: true/false` 时才切换实心类。
+
+### 文档 / 预览 / 版本
+
+- `README.md`：§2.4 / §7.2 / §7.3 / §10.10 / §11.4 / §12.4 / §13.1 更新玻璃语义、自动回退类与 API 行为；§2.1.3 的 CDN 单文件配方改为**先 `await` CSS 再初始化**（消除加载顺序竞态）；§4.4 补充自动回退的 AA 数值。
+- `preview.html` 版本同步；`ISSUES.md` 记录三条玻璃缺陷及其修复；`AI-GUIDE.md` 硬约束、API 速查与历史基线同步。
+- 9 处版本声明与 `st-extension-template/ui-kit/` 4 资产同步到 2.7.2；CDN 示例统一锁定 `v2.7.2`。
+
+### 验证
+
+- `npm test` 全绿（0 失败），新增玻璃三态 / 近不透明回退 / 面板模糊断言。
+- 零依赖 headless Chrome 156 探针：面板自身 blur 生效（玻璃态）、宿主 no-blur 时有效透出 0% → 1.1%（深）/ 2.1%（浅，无可读重影）、CSS 未就绪的时序竞争可自愈；`prefers-reduced-transparency` / `forced-colors` 降级行为不变。复跑命令见 `test/st-glass-transparency.js`。
+- **真实 SillyTavern 宿主实机验证**（本机 ST 服务 + 下游扩展 4 资产覆盖升级）：21 项断言全绿——Fast UI 默认下自动挂 `.nvui-glass-fallback` 且不挂 `.nvui-solid`、回退为 97% 档、面板中心命中 kit（载体 z-index 1000000）、宿主 `showModal()` 时自动让位并在关闭后还原、关闭 Fast UI 后玻璃恢复（面板 30% 透明 + 48px 背后模糊、遮罩 20% + 24px）、重新开启后回退恢复、面板关闭/重开正常、零 pageerror。Playwright 版 `test/st-glass-fallback-check.js` 已按新语义更新，未在本轮执行。
+
+### 兼容性
+
+- 无 token / 类名 / 关键帧 / `!important` / 公开 API 签名 / 状态格式变更；DOM 必需结构不变。
+- 视觉变化：面板态改为「更透明 + 更强背后模糊」（遮罩 20% / 24px，面板 30% / 48px + 提亮）；宿主禁模糊时由「不透明」变为「97% token 派生近不透明档（极轻透出）」。如需完全实心，显式加 `.nvui-solid`。
+- 下游迁移：覆盖 `tokens.css` / `components.css` / `nvui-api.js` / `tokens.json` 四个运行资产即可；想保留旧的「禁模糊即全实心」行为可继续手动加 `.nvui-solid`。
+
+## v2.7.1（2026-10-23）· GitHub #15 浏览器回归稳定性修复
+
+- 表单浏览器回归在设置半选 checkbox 后等待背景色与横杠透明度达到最终计算值，取代固定 250ms 延时；原有最终样式断言仍保留，超时会暴露真实回归。
+- 同步 `package.json`、`tokens.json`、CSS 文件头、`NVUI.version`、预览和模板副本到 2.7.1。组件 CSS 的规则与 token 取值不变，公开 API、DOM 契约与组件行为不变。
+- CDN 示例统一锁定 `v2.7.1` tag；发布时创建附注 tag 与 GitHub Release。
+
 ## v2.7.0（2026-10-23）· [2.7.0] - 2026-10-23 opt-in 表单作用域与 GitHub #12–#14 修复
 
 > 本版本为 SemVer 小版本（MINOR），保持既有公开 API、状态格式与 token 取值不变；已打 `v2.7.0` tag，未创建 GitHub Release。静态、本地浏览器及无宿主 E2E 回归已通过，真实 SillyTavern 宿主的 6 项用例尚未执行。

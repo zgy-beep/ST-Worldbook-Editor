@@ -17,6 +17,14 @@
 
 ---
 
+## 当前 GitHub 维护
+
+| GitHub Issue | 问题与证据 | 修复状态 |
+| :--- | :--- | :--- |
+| [#15](https://github.com/zgy-beep/ui-kit/issues/15) | v2.7.0 forms 浏览器回归一次并行运行得到 453/455，半选 checkbox 背景和横杠透明度读到过渡中间帧；串行复跑 455/455。 | v2.7.1 修复与验收通过：等待两项计算样式终值并保留最终断言；三份并行 forms 各 455/455。发布提交关联 `Fixes #15`。 |
+
+---
+
 ## 已修复
 
 | # | 问题 | 严重度 | 状态 | 证据 | 修复 |
@@ -31,7 +39,9 @@
 | 11 | `.nvui-progress-bar::after` 的 shimmer 无限动画常驻（0% / 100% 时也在跑） | P2 性能 | 已修复 | `components.css` `.nvui-progress-bar::after`。扫光是「进行中」的语义装饰，0% 尚未开始、100% 已结束，此时跑无限循环动画纯属浪费合成层资源 | 新增**可选**状态类 `.nvui-progress.is-idle`（0%）/ `.is-complete`（100%），CSS 侧 `animation: none` 停掉扫光；`NVUI.progress()` 的 `setValue()` 自动维护这两个类（`syncActivity`）。**不确定进度（`is-indeterminate`）永远保持扫光**。未新增 token、未改既有 DOM 契约（手写 DOM 不加类时行为与旧版一致） |
 | 13 | `prefers-reduced-motion` 门禁只覆盖 `.nvui-scope *` / `dialog.nvui-tl *`，宿主容器内未加 `.nvui-scope` 时组件动画不会降级（无障碍红线被绕过） | P2 无障碍 | 已修复 | `components.css` reduced-motion 块（原 L2069-2072）。宿主把 kit 组件挂进自己的容器却没加 `.nvui-scope` → 层 1 通配不生效 → 组件动画照常播放 | 降级块改为**两层**：层 1 保留 `.nvui-scope *` / `dialog.nvui-tl *` 通配（覆盖作用域内的自定义子元素），层 2 用 `:is(...)` **逐个点名 27 个自身带 animation/transition 的 kit 类**（含 `::before`/`::after` 变体 + `.nvui-stagger > *` + 开关 checkbox）。**未新增 `!important`**（仍 5 个，预算 ≤ 8 保持不变）。回归断言：扫描 `components.css` 里所有带 `animation:`/`transition:` 的规则，提取其 kit 基类，逐一断言出现在降级块选择器中 |
 | 14 | `preview.html` 的 `replayMotion` 逐节点读 `offsetWidth` 强制回流（N 节点 = N 次同步布局）；滚动监听（`capture: true`）未节流，一次滚动触发数十次回调 | P3 性能 | 已修复 | `preview.html` 原 `replayMotion` 内 `void node.offsetWidth`（逐节点）+ `window.addEventListener('scroll', repositionTip, true)` 直接调用 | `replayMotion` 改为「批量摘类 → 全局只读一次 `document.body.offsetWidth` → 批量挂回」，并对 stagger 子项单独触发回流（子项数远小于摘类节点数）；`repositionTip` 用 `requestAnimationFrame` 合并为每帧至多一次。回归断言：断言重播函数不含 `void node.offsetWidth` 且含 `void document.body.offsetWidth`；断言滚动处理含 `requestAnimationFrame` + `repositionRaf` |
-| 15 | 宿主 `body.no-blur` 全局禁用 `backdrop-filter` 时，kit 玻璃只剩半透明底色，下层文字透出重影 | P2 视觉 | 已修复 | 宿主规则实为 `body.no-blur * { backdrop-filter: unset !important }`（`public/css/toggle-dependent.css` L368）。浏览器**仍支持** backdrop-filter，故 `@supports not` 降级块不触发 → 玻璃底色半透明 → 下层文字直接透出 | `nvui-api.js` 新增 `detectGlassSupport()` / `syncGlassFallback()`：**造隐藏 `.nvui-glass` 探针读渲染后的实际计算值**（`getComputedStyle().backdropFilter`），为 `none` 即判定被外部禁用 → 自动给根节点挂 `.nvui-solid` 实心回退。不猜宿主类名（避免耦合）。`createPanel()` / `showToast()` 已内置调用。实机 `test/st-glass-fallback-check.js` **9/9 全绿**：宿主 no-blur 下探测值 = `none`、面板背景 = `rgb(22,26,36)`（不透明）、移除 no-blur 后探测值恢复 `blur(20px) saturate(1.5)`、全程零控制台错误 |
+| 15 | 宿主 `body.no-blur` 全局禁用 `backdrop-filter` 时，kit 玻璃只剩半透明底色，下层文字透出重影 | P2 视觉 | 已修复 | 宿主规则实为 `body.no-blur * { backdrop-filter: unset !important }`（`public/css/toggle-dependent.css` L368）。浏览器**仍支持** backdrop-filter，故 `@supports not` 降级块不触发 → 玻璃底色半透明 → 下层文字直接透出 | `nvui-api.js` 新增 `detectGlassSupport()` / `syncGlassFallback()`：**造隐藏 `.nvui-glass` 探针读渲染后的实际计算值**（`getComputedStyle().backdropFilter`），为 `none` 即判定被外部禁用 → 自动给根节点挂 `.nvui-solid` 实心回退。不猜宿主类名（避免耦合）。`createPanel()` / `showToast()` 已内置调用。实机 `test/st-glass-fallback-check.js` **9/9 全绿**：宿主 no-blur 下探测值 = `none`、面板背景 = `rgb(22,26,36)`（不透明）、移除 no-blur 后探测值恢复 `blur(20px) saturate(1.5)`、全程零控制台错误（v2.7.2 起改为 `.nvui-glass-fallback` 97% 近不透明回退，见 #21/#22） |
+| 21 | 面板「没有玻璃透明感」：面板虽然半透明，但透明度不足且背后模糊不够，视觉上不像玻璃 | P2 视觉 | 已修复（v2.7.2） | 真实 ST 实机对照：玻璃态 = 透明面板 + 面板背后强模糊。面板态单独采用更透的玻璃：遮罩 `color-mix(--nvui-bg 20%)` + `blur(24px)`，面板 `color-mix(--nvui-bg 30%)` + token 柔光 + `blur(48px) saturate(190%) brightness(1.12)`；浅色 62% 底；窄屏降档。面板/遮罩规则提升到 `dialog.nvui-tl` 作用域，压过真实 ST 中其它扩展内嵌的旧版 kit CSS | `.nvui-overlay.is-panel` / `.nvui-panel` 使用面板态高透明玻璃 + 强 blur；`dialog.nvui-tl` 作用域副本保证多扩展共存时生效；`.nvui-solid`/Fast UI 回退/减少透明度降级仍可覆盖。面板态为视觉优先档（极亮宿主不承诺 text-2 AA）；新增 `test/st-glass-transparency.js` 与真实宿主 21 项断言 |
+| 22 | 玻璃探测时序死锁 + 不可逆：kit CSS 未就绪时调用 `syncGlassFallback()` 永久缓存 false 并挂 `.nvui-solid`；`.nvui-solid .nvui-glass` 反压探针，导致 CSS 就绪后 `{force:true}` 仍返回 false、无法恢复；另有 `setTheme()` 误清用户实心偏好、`open()` 不重探的反向缺陷 | **P1 正确性** | 已修复（v2.7.2） | CDP 复现：CSS 未注入时 `{supported:false, html:'nvui-solid'}`；注入 CSS 后 `{supported:false}` 且面板 `rgb(22,26,36)`、`backdrop-filter:none`；真实 ST `fast_ui_mode` 默认 true（body.no-blur），首装 `showToast()` 即可触发并永久实心；`setTheme()` 只清 body 类、自动回退在 html，两边状态失联 | 探测三态化（supported/unsupported/unknown）：unknown（CSS 未就绪）不缓存、不落回退，按「根/body class + reduce 偏好 + CSS 就绪 + 用户实心」签名重探（定时器 / load / fonts.ready / `openLayer()` / 媒体变化）；探测前临时摘掉 `.nvui-solid` 与 `.nvui-glass-fallback` 避免自锁；宿主禁模糊时改挂可逆的 `.nvui-glass-fallback`（97% token 派生近不透明档），支持恢复后自动移除；`setTheme()` 不再无条件清 `.nvui-solid`；`openLayer()` 增加重探。新增 `test/st-glass-transparency.js` 覆盖时序竞争与回退可逆 |
 
 | 17 | 宿主 `showModal()` 模态期间，kit 浮层被压住且**完全无法交互**（用户点了没反应，无任何视觉提示）；且 v2.3.0 README §13.5.1 对照表 F 行「`popover=manual` 能压过一切」为**错误论断** | P1 交互 / P1 文档 | 已修复 | 实机探针（`/tmp/probe-carrier*.js`，真实 ST 宿主）：① `popover="manual"` 无论 show 先后**都压不过** `showModal()` 模态；② 普通 div + `z-index:2147483647` 同样不行；③ 根因**不是 z-index**，而是 `showModal()` 给**整页**加 `inert`，`inert` 元素不参与命中测试（`elementsFromPoint` 不返回），也无法获得焦点 | **改为「主动让位」而非硬压**：① `components.css` 新增降级态 `dialog.nvui-tl.is-host-modal`（`pointer-events:none` + `opacity:0.35` + `grayscale(0.6)`，子浮层一并让位）；② `nvui-api.js` 新增 `countHostModals()` / `syncHostModalState()` / `getCarrierState()`；③ 装幂等 watcher（`MutationObserver` 监听 `dialog[open]` + 捕获 `close`），宿主模态**动态开关**时自动降级/还原；④ README §13.5.1 F 行更正 + 新增 §13.7。实机 `test/st-carrier-host-modal-check.js` **18/18 全绿**。GitHub Issue #4 |
 
@@ -167,7 +177,7 @@
 | [Issue #5](https://github.com/zgy-beep/ui-kit/issues/5) | 表现层持久化 | 面板与核心组件状态记忆（`persist: true`）：支持自动记忆面板宽高尺寸、分栏比例、激活 Tab 索引；支持自定义 Storage Adapter（适配酒馆 `settings.json`）；内置 250ms 防抖与视口多分辨率边界越界钳制保护 | v2.5.0 | **Closed (v2.5.0)**：全量实现并实机验证。支持声明式 `persist: true` 或精细化对象配置 `{ size, tab, accordion, storage }`；内置可插拔 `StorageAdapter`（默认 localStorage 沙箱键 `nvui_state_${id}`，支持适配宿主 `extension_settings` 与 `saveSettingsDebounced`，内置 Quota 异常防护）；内置 250ms 写入防抖调度器与关闭/销毁安全冲刷（Flush）；实现多分辨率跨屏 Viewport Clamping 视口越界钳制（PC 默认 720px 黄金尺寸，移动端 <=600px 强制回退 100% 抽屉，坐标防溢出自愈）；导出全局 `NVUI.clearLayoutState(id)` 与实例级 `panel.clearLayoutState()` 清理接口。 |
 | [Issue #6](https://github.com/zgy-beep/ui-kit/issues/6) | 面板头部交互 | 预置主题切换按钮（`themeToggle`）与版本更新提示按钮（`update` / `panel.showUpdate`）：规范右上角标准操作流（Actions → 主题切换 → 关闭）及左上角版本更新动态点亮入口 | v2.5.0 | **Closed (v2.5.0)**：全量实现并实机验证。规范操作流标准次序（`.nvui-panel-actions` 严格保证 `[自定义 actions...]` -> `[themeToggle]` -> `[closeBtn]`）；预置主题切换按钮（日/月图标平滑过渡动效、直连 `NVUI.setTheme` 切换 `.nvui-theme-light` 并失效 Token 缓存、联动 `onThemeChange` 回调）；标题区预置版本更新提示胶囊（`opts.update` 静态配置与 `panel.showUpdate` 动态点亮/隐藏/更新接口）；严格遵守 WAI-ARIA APG 无障碍规范（`role="button"`, `tabindex="0"`, 键盘 Enter/Space 触发）、纯文本注入（杜绝 XSS）与 Flat Glass 无实体外描边红线。 |
 | [Issue #10](https://github.com/zgy-beep/ui-kit/issues/10) | 组件层 | 独立复选框 `.nvui-checkbox`：批量选择场景的 16px 小方块，自带宿主隔离，支持 `:checked` / `:indeterminate`，避免每个下游插件自绘 | v2.6.0 | **Implemented (v2.6.0)**：组件、示例与文档已落地并在 Chromium 回归中验证；GitHub issue 由本次发布提交关闭（`Fixes #10`）；同批的 #9 / #11 见「已修复」表第 18 / 20 行。 |
-| —（规划） | 表单作用域 | opt-in `.nvui-form-scope`：自定义普通容器显式加类后，既有 `.nvui-input` 的 input / select / textarea / option 共享既有 7 条宿主表单隔离；默认双载体不变，非 kit 控件不接管，不创建定位 / 遮罩 / 模态，`!important` 预算仍 14 | v2.7.0 | **已打 tag，本地验收通过**：Codex 独立复验静态门禁 362/362、forms 455/455、accordion 18/18、reporting 31/31、本地 E2E 52 PASS / 0 FAIL / 6 SKIP（真实宿主未执行）；模板 4 资产已同步。详见 `RELEASE_PLAN_v2.7.0.md`。announce API 与尺寸令牌扩展暂缓。 |
+| —（规划） | 表单作用域 | opt-in `.nvui-form-scope`：自定义普通容器显式加类后，既有 `.nvui-input` 的 input / select / textarea / option 共享既有 7 条宿主表单隔离；默认双载体不变，非 kit 控件不接管，不创建定位 / 遮罩 / 模态，`!important` 预算仍 14 | v2.7.0 | **已打 tag，本地验收通过**：Codex 独立复验静态门禁 362/362、forms 455/455、accordion 18/18、reporting 31/31、本地 E2E 52 PASS / 0 FAIL / 6 SKIP（真实宿主未执行）；模板 4 资产已同步。详见 `CHANGELOG.md` 的 v2.7.0 条目。announce API 与尺寸令牌扩展暂缓。 |
 
 ### v2.5.0 特性结项与关闭明细 (Feature Resolution Details)
 
@@ -240,7 +250,8 @@
 | `test/st-layer-check.js` | 层级回归：面板 5 采样点是否在宿主之上 / 吐司是否高于面板 / 关闭后还原 |
 | `test/st-layer-probe.js` | 层级根因探针：对比 dialog.show / showModal / popover / 固定 div 四种载体的命中顺序 |
 | `test/st-glass-probe.js` | 玻璃生效探测：宿主 no-blur 下 backdrop-filter 是否被关掉 |
-| `test/st-glass-fallback-check.js` | 玻璃实心回退（#15）9 项：宿主 no-blur 下探测值 / 根节点自动挂 `.nvui-solid` / 面板背景不透明 / 移除 no-blur 后对照恢复 blur / 零控制台错误 |
+| `test/st-glass-fallback-check.js` | 玻璃回退（#15/#21/#22）：宿主 no-blur 下探测值 / 根节点自动挂 `.nvui-glass-fallback`（不再 `.nvui-solid`）/ 面板 97% token 派生近不透明档 / 移除 no-blur 后自动恢复 / 用户 `.nvui-solid` 优先 / 零控制台错误 |
+| `test/st-glass-transparency.js` | 玻璃透明感（#21/#22，零依赖 CDP）：面板自身 blur（透明 + 背后模糊）/ `.nvui-solid` 实心 / no-blur 97% 近不透明回退 / CSS 未就绪时序竞争自愈 / reduced-transparency / solid 覆盖 fallback |
 | `test/st-focus-probe.js` | 焦点归还根因探针 |
 | `test/st-toplayer-probe.js` | top-layer 行为探针：实测非模态 `dialog.show()` 是否进浏览器 top layer（结论：不进） |
 | `test/st-perf-probe.js` | 性能总探针（#8 / #9 / #10 / #12）：CDP `Performance.getMetrics` 测布局次数 / 布局耗时 + 双层 blur 帧间隔对照 |
