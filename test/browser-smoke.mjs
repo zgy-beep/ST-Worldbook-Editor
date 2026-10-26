@@ -169,6 +169,7 @@ window.TavernHelper = {
     if (invalidOnce) {invalidOnce=false;return '这里是格式错误的说明文字';}
     if (replyKind==='keys') return JSON.stringify({keys:['海港','船舶']});
     if (replyKind==='conflict') return JSON.stringify([{uid:1,severity:'warn',issue:'时间线冲突（冒烟）',details:'与条目 2 的日期矛盾',fix_suggestion:'统一年份'}]);
+    if (replyKind==='conflict-table') return ['| # | 类型 | 涉及条目/来源 | 严重程度 | 一句话摘要 |','|---|---|---|---|---|','| 1 | 状态冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 致命 | 唐小康条目未提及秦明轩的存在，但何雅婷条目自己承认秦明轩占有过她。 |','| 2 | 关系冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 中等 | 两人关系描述不一致。 |'].join('\\n');
     if (replyKind==='text') return '港口的灯火沿着海岸延伸。';
     return '<think>先分析例子 [{"uid":999,"content":"忽略"}]</think>\\n结果如下：\\n' +
       '\u0060\u0060\u0060json\\n[{"uid":1,"content":"潮汐港是一座依海而建的繁忙港口。"}]\\n\u0060\u0060\u0060'; }
@@ -324,6 +325,22 @@ try {
   assert.match(conflictReport.text, /来源《验收世界书》/, '冲突报告必须标明来源世界书');
   assert.match(conflictReport.text, /检查范围/, '冲突报告必须标明检查范围');
   assert.equal(conflictReport.gotoUid, '1', '有效 uid 应提供跳转按钮');
+
+  // 回归（issue 截图）：模型无视 JSON 契约改输出 Markdown 表格时，冲突报告应降级解析而不是弹错误
+  await page.evaluate(()=>{ replyKind='conflict-table'; });
+  await page.locator('[data-a=aiconflict]').click();
+  await page.waitForFunction(() => /状态冲突/.test(document.querySelector('#wbe-conflicts')?.textContent || ''));
+  const tableReport = await page.evaluate(() => ({
+    text: document.querySelector('#wbe-conflicts')?.textContent || '',
+    gotoCount: document.querySelectorAll('#wbe-conflicts [data-a=goto]').length,
+    logWarn: (window.__wbeLog?.getEntries?.() || []).some(entry => String(entry.message).includes('Markdown 表格')),
+  }));
+  assert.match(tableReport.text, /来源《验收世界书》/, '表格降级报告仍应标注来源');
+  assert.match(tableReport.text, /状态冲突/);
+  assert.match(tableReport.text, /唐小康条目未提及秦明轩/);
+  assert.equal(tableReport.gotoCount, 0, '表格降级解析没有可靠 uid，不应提供跳转按钮');
+  assert.equal(tableReport.logWarn, true, '降级解析应写一条诊断日志');
+  await page.evaluate(()=>{ replyKind='batch'; });
 
   // §9.1 A2：触发测试命中行可点击跳转
   await page.locator('[name=probe]').fill('潮汐港的船只进出港口');

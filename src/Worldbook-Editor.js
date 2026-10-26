@@ -1,5 +1,5 @@
 // 世界书编辑器 v0.8.0 · SillyTavern 标准扩展业务模块
-import { buildMessages, parseAIJSON } from './ai-prompts.js';
+import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
 import { createWorldbookApi } from './worldbook-api.js';
@@ -446,7 +446,9 @@ ${GUIDE}
     "fix_suggestion": "具体可行的修改建议"
   }
 ]
-若没有发现矛盾，只返回空数组 []。`;
+若没有发现矛盾，只返回空数组 []。
+
+【硬性格式】只允许输出 JSON 数组本身，数组每个元素必须是对象。禁止输出 Markdown 表格、代码围栏、标题或解释文字——表格不会被解析。`;
 
   const TOPOLOGY_SYS = `你是 SillyTavern 提示词注入拓扑专家。
 根据条目的内容、性质与功能，推荐其在模型上下文中的最佳插入位置（pos）、注入深度（depth）与顺序优先级（order）。
@@ -479,12 +481,29 @@ ${GUIDE}
   "reason": "推荐理由简述"
 }`;
 
-  async function askJSON(system, user) {
-    try { return parseAIJSON(await ask(system, user, { format: 'json' })); }
-    catch (err) {
+  /**
+   * 请求 AI 并解析 JSON。
+   * options.recover(raw, error)：解析失败时的领域级容错（如冲突审查的 Markdown 表格）；
+   * 返回非 null 即视为成功，不再按 JSON 契约重试。
+   */
+  async function askJSON(system, user, options = {}) {
+    const recover = typeof options.recover === 'function' ? options.recover : null;
+    const attempt = async retry => {
+      const rawText = await ask(system, user, { format: 'json', retry });
+      try {
+        return parseAIJSON(rawText);
+      } catch (err) {
+        const recovered = recover ? recover(rawText, err) : null;
+        if (recovered !== null && recovered !== undefined) return recovered;
+        throw err;
+      }
+    };
+    try {
+      return await attempt(false);
+    } catch (err) {
       if (!/有效 JSON/.test(err.message)) throw err;
       logAI.warn('AI 返回非法 JSON，按契约重试一次', { message: err.message });
-      return parseAIJSON(await ask(system, user, { format: 'json', retry: true }));
+      return attempt(true);
     }
   }
   const styleRef = skip => {
@@ -1834,7 +1853,15 @@ ${GUIDE}
         const brief = S.entries.slice(0, 150).map(e => `[UID:${e.uid}]《${A.name(e)}》: ${(e.content || '').slice(0, 180)}`).join('\n---\n');
         const targetUids = S.checked.size ? [...S.checked] : S.entries.slice(0, 30).map(e => e.uid);
         const targetData = S.entries.filter(e => targetUids.includes(e.uid)).map(e => `【待检条目 UID:${e.uid} 《${A.name(e)}》】\n${e.content}`).join('\n\n');
-        const r = await askJSON(CONFLICT_SYS, `【世界书基准概览】\n${brief}\n\n【重点检测目标】\n${targetData}\n\n请检测重点目标与基准概览之间是否存在逻辑硬伤与事实冲突：`);
+        const r = await askJSON(CONFLICT_SYS, `【世界书基准概览】\n${brief}\n\n【重点检测目标】\n${targetData}\n\n请检测重点目标与基准概览之间是否存在逻辑硬伤与事实冲突：`, {
+          // 容错：模型无视 JSON 契约改输出 Markdown 表格时，降级解析成同构冲突对象
+          recover(rawText) {
+            const rows = parseConflictTable(rawText);
+            if (!rows) return null;
+            logAI.warn('冲突审查返回 Markdown 表格，已按表格容错解析', { rows: rows.length });
+            return rows;
+          },
+        });
         S.tool.aiConflicts = Array.isArray(r) ? r : [r];
         // G01：记录报告来源与检查范围（切书后 loadEntries 会据此清空报告）
         S.tool.conflictSrc = {
@@ -1845,7 +1872,7 @@ ${GUIDE}
         };
         st.text(S.tool.aiConflicts.length ? `发现 ${S.tool.aiConflicts.length} 处潜在矛盾` : '未发现明显冲突');
         renderConflicts();
-      } catch (err) { st.text(''); toast.error('审查失败：' + (err.message || err)); }
+      } catch (err) { logAI.error('AI 冲突审查失败', { error: err }); st.text(''); toast.error('审查失败：' + (err.message || err)); }
       el.prop('disabled', false);
     },
     async bgroup() {

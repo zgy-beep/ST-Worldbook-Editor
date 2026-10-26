@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildMessages, parseAIJSON } from '../src/ai-prompts.js';
+import { buildMessages, parseAIJSON, parseConflictTable } from '../src/ai-prompts.js';
 
 const CONTRACT = '仅输出本次任务要求的有效JSON，不输出思考过程/说明/Markdown，保持原任务数组或对象结构';
 
@@ -364,3 +364,54 @@ test('buildMessages 参数缺失时给出明确错误', () => {
   assert.throws(() => buildMessages({ user: 'U' }), /system/);
   assert.throws(() => buildMessages({ system: 'S' }), /user/);
 });
+
+// ---------------------------------------------------------------------------
+// 回归：AI 冲突审查返回 Markdown 表格（issue 现场截图复现）
+// 模型无视 JSON 契约输出表格时，parseAIJSON 会失败（还会把 [0]/[2] 引用标记
+// 误当 JSON 候选），parseConflictTable 负责降级解析，askJSON 的 recover 接住它。
+// ---------------------------------------------------------------------------
+const CONFLICT_TABLE = `| # | 类型 | 涉及条目/来源 | 严重程度 | 一句话摘要 |
+|---|---|---|---|---|
+| 1 | 状态冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 致命 | 唐小康条目未提及秦明轩的存在，但何雅婷条目自己承认秦明轩占有过她。 |
+| 2 | 关系冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 中等 | 两人关系描述不一致。 |`;
+
+test('parseAIJSON 对 Markdown 表格报错时点明「检测到表格」而不是只报数组元素类型', () => {
+  assert.throws(() => parseAIJSON(CONFLICT_TABLE), err => {
+    assert.match(err.message, /有效 JSON/);
+    assert.match(err.message, /检测到 Markdown 表格/);
+    return true;
+  });
+});
+
+test('parseConflictTable 把冲突表格降级解析为与 JSON 契约同构的对象', () => {
+  const rows = parseConflictTable(CONFLICT_TABLE);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(row => row.severity), ['danger', 'warn']);
+  assert.equal(rows[0].issue, '状态冲突');
+  assert.match(rows[0].details, /唐小康条目未提及秦明轩/);
+  assert.match(rows[0].details, /涉及：\[0\] 人物-唐小康 与 \[2\] 人物-何雅婷/);
+  assert.equal(rows[0].fix_suggestion, '请结合上述摘要核实相关条目并修改');
+  // 表格没有可靠 uid，不能伪造跳转目标
+  assert.deepEqual(rows.map(row => row.uid), [null, null]);
+});
+
+test('parseConflictTable 兼容无首尾竖线 / 表头别名 / 修复建议列', () => {
+  const text = `问题类型 | 涉及条目 | 级别 | 说明 | 修复建议
+状态冲突 | 条目 A | 严重 | A 与 B 矛盾 | 修改 A 的时间线
+设定冲突 | 条目 C | 一般 | C 缺少前提 | 补充 C 的背景`;
+  const rows = parseConflictTable(text);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].issue, '状态冲突');
+  assert.equal(rows[0].severity, 'danger');
+  assert.equal(rows[0].fix_suggestion, '修改 A 的时间线');
+  assert.equal(rows[1].severity, 'warn');
+});
+
+test('parseConflictTable 对普通说明文字 / 单行 / 无表头返回 null（交给重试与报错）', () => {
+  assert.equal(parseConflictTable('AI 觉得这段设定没问题。'), null);
+  assert.equal(parseConflictTable('| 只有一行 | 数据 |'), null);
+  assert.equal(parseConflictTable('| 甲 | 乙 | 丙 |\n|---|---|---|\n| 1 | 2 | 3 |'), null);
+  assert.equal(parseConflictTable(''), null);
+  assert.equal(parseConflictTable(null), null);
+});
+

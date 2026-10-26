@@ -151,6 +151,10 @@ npm run test:browser
     概率 0 / order 重复 / 次要关键词共用；`hit()` / `findHits()` 复用同一 ReDoS 判定。
   - **A1** 宿主访问收口：`index.js` 改用 `runtime.getHostEventApi()` / `peekGlobalNVUI()`，`ui-contract` 静态守卫。
   - **A2** 浏览器冒烟对 `ST_PUBLIC_DIR` / 宿主 jQuery 缺失给出可操作指引并打印实际路径；触发测试命中行可点击跳转。
+- **AI 输出容错（冲突审查，2026-10-27）**：`askJSON` 增加 `recover(raw, err)` 领域级容错；`parseConflictTable`（`src/ai-prompts.js`）
+  把模型误输出的 Markdown 表格降级成与 JSON 契约同构的冲突对象（`uid: null`、严重程度中文映射、不提供跳转）；
+  `parseAIJSON` 报错会提示「检测到 Markdown 表格」；`CONFLICT_SYS` 末尾追加硬性 JSON 格式要求。
+  测试：`test/ai-prompts.test.mjs`（4 条）+ 浏览器冒烟 `conflict-table` 场景 + 降级日志断言。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

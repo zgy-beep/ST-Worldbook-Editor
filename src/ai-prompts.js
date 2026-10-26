@@ -156,9 +156,23 @@ function preview(text, max = 180) {
   return body.length > max ? body.slice(0, max) + '…' : body;
 }
 
+/** 输出里出现多行 Markdown 表格：用于在报错时点明「模型没按 JSON 契约返回」。 */
+function looksLikeMarkdownTable(text) {
+  const rows = String(text ?? '').split(/\r?\n/).filter(line => {
+    const trimmed = line.trim();
+    return trimmed.includes('|') && trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').length >= 3;
+  });
+  if (rows.length < 2) return false;
+  const hasSeparator = rows.some(line => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line));
+  return hasSeparator;
+}
+
 function invalidJSON(reason, text) {
   const body = preview(text);
-  return new Error(`AI 返回的不是有效 JSON：${reason}${body ? `。原文：${body}` : ''}`);
+  const tableHint = looksLikeMarkdownTable(text)
+    ? '（检测到 Markdown 表格：本任务只接受对象或对象数组 JSON，表格不会被直接解析）'
+    : '';
+  return new Error(`AI 返回的不是有效 JSON：${reason}${tableHint}${body ? `。原文：${body}` : ''}`);
 }
 
 function ambiguousJSON(count, text) {
@@ -609,4 +623,61 @@ export function parseAIJSON(text) {
   throw invalidJSON('未找到完整的 JSON 对象或对象数组（可能缺少闭合括号，或结果被截断）', raw);
 }
 
-export default { buildMessages, parseAIJSON };
+/**
+ * 容错解析「AI 冲突体检」的 Markdown 表格输出。
+ *
+ * 背景：`CONFLICT_SYS` 要求只输出 JSON 数组，但部分模型（尤其长上下文/弱指令跟随）
+ * 会改输出 Markdown 表格。此时 `parseAIJSON` 会失败，而表格里的 `[0]`/`[2]` 之类
+ * 引用标记还会被当成 JSON 候选、抛出误导性的「数组第 1 项是数字」。
+ * 这里把表格行映射成与 JSON 契约同构的冲突对象，让报告仍可展示：
+ *   - 不伪造 uid（无法确定条目身份，因此不提供跳转按钮）；
+ *   - 严重程度按中文关键词映射到 danger / warn；
+ *   - 无法识别为冲突表格时返回 null，交给调用方决定重试或报错。
+ *
+ * @param {unknown} text
+ * @returns {{uid: null, severity: 'danger'|'warn', issue: string, details: string, fix_suggestion: string}[]|null}
+ */
+export function parseConflictTable(text) {
+  const raw = String(text ?? '');
+  if (!raw.trim()) return null;
+
+  const rows = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.includes('|')) continue;
+    // 分隔行：| --- | :---: | ... |
+    if (/^\|?\s*:?-{2,}:?(\s*\|\s*:?-{2,}:?)+\|?$/.test(trimmed)) continue;
+    const cells = trimmed.replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+    if (cells.length >= 3) rows.push(cells);
+  }
+  if (rows.length < 2) return null;
+
+  const header = rows[0];
+  const indexOf = patterns => header.findIndex(cell => patterns.some(pattern => pattern.test(cell)));
+  const typeIdx = indexOf([/类型/, /问题/, /冲突/]);
+  const severityIdx = indexOf([/严重/, /级别/, /等级/]);
+  const summaryIdx = indexOf([/摘要/, /说明/, /详情/, /描述/]);
+  const sourceIdx = indexOf([/条目/, /来源/, /涉及/]);
+  const fixIdx = indexOf([/建议/, /修复/]);
+  // 表头至少要能认出「冲突类型 / 严重程度 / 摘要」之一，否则视为普通文本
+  if (typeIdx === -1 && severityIdx === -1 && summaryIdx === -1) return null;
+
+  const out = [];
+  for (const cells of rows.slice(1)) {
+    const issue = typeIdx >= 0 ? cells[typeIdx] : '';
+    const summary = summaryIdx >= 0 ? cells[summaryIdx] : '';
+    if (!issue && !summary) continue;
+    const severityText = severityIdx >= 0 ? cells[severityIdx] : '';
+    const source = sourceIdx >= 0 ? cells[sourceIdx] : '';
+    out.push({
+      uid: null,
+      severity: /致命|严重|高|阻断/.test(severityText) ? 'danger' : 'warn',
+      issue: issue || '潜在冲突',
+      details: [summary, source ? `涉及：${source}` : ''].filter(Boolean).join('\n'),
+      fix_suggestion: fixIdx >= 0 && cells[fixIdx] ? cells[fixIdx] : '请结合上述摘要核实相关条目并修改',
+    });
+  }
+  return out.length ? out : null;
+}
+
+export default { buildMessages, parseAIJSON, parseConflictTable };
