@@ -22,11 +22,14 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
             ├─ src/worldbook-api.js  酒馆助手新旧接口兼容层
             ├─ src/ai-prompts.js     AI 消息拼装与 JSON 解析（不依赖运行时，可被 Node 单测）
             ├─ src/jb-presets.js     破限预设/保存校验纯函数（零运行时，可被 Node 单测）
+            ├─ src/health-rules.js   体检/关键词触发规则纯函数（零依赖，可被 Node 单测）
             └─ src/logger.js         诊断日志（零 import 叶子模块，可被 Node 单测；index/runtime/editor 共用）
 ```
 
 - `src/index.js` 只管生命周期与菜单，**不写业务 UI**。
 - `src/runtime.js` 是**唯一**允许接触 `SillyTavern.getContext()` 的地方；其他模块通过 runtime 拿能力。
+  `index.js` 的事件源用 `runtime.getHostEventApi()`、NVUI 全局窥视用 `runtime.peekGlobalNVUI()`；
+  `test/ui-contract.test.mjs` 有静态守卫，其它 `src/` 文件出现 `globalThis.SillyTavern` / `SillyTavern.getContext` 会红。
 - `src/ai-prompts.js` 必须保持零运行时依赖，否则 Node 单测跑不起来。
 - `src/logger.js` 必须保持零 import；日志只存内存、不写宿主存储，敏感字段由 logger 统一脱敏。
 - `ui-kit/` 是 **NVUI Kit v2.8.0 的自包含独立项目**，由上游维护，本仓库只做本地内置分发。
@@ -37,7 +40,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
 ```bash
 npm test              # 项目测试（扩展自身行为）
 npm run test:kit      # Kit 规范守护（规范 + API 表面 + v2.8.0 功能 + downstream 自检）
-npm run test:browser  # 浏览器端到端冒烟，需额外两个环境变量（见下）
+npm run test:browser  # 浏览器端到端冒烟，需额外环境变量（见下）
 ```
 
 `npm run test:kit:glass` 是 Kit 上游的玻璃透明感探针（真实 Chrome，可选，不属必跑门禁）。
@@ -49,6 +52,9 @@ PLAYWRIGHT_MODULE_PATH="C:/Users/Administrator/.workbuddy/binaries/node/workspac
 CHROME_PATH="C:/Program Files/Google/Chrome/Application/chrome.exe" \
 npm run test:browser
 ```
+
+可选 `ST_PUBLIC_DIR` 指向 SillyTavern 的 `public` 目录（默认按 `../../APP/SillyTavern/public` 推断；
+换机器 / 换克隆位置时必须显式设置，否则脚本会打印可操作的排障指引后退出）。
 
 本机 SillyTavern 在 `T:/Github/SillyTavern/APP/SillyTavern`（1.19.0），
 扩展通过 **Junction** 软链到 `public/scripts/extensions/third-party/ST-Worldbook-Editor` 才能实跑。
@@ -135,6 +141,16 @@ npm run test:browser
   单测 `test/logger.test.mjs`（13 条）+ `ui-contract.test.mjs` 静态守卫 + 浏览器冒烟覆盖脱敏与全局异常。
 - **桌面面板增高**：`createPanel` 关闭 `persist.size`，业务作用域内把 `--nvui-panel-max-h` 从
   Kit 默认 `88vh` 提到 `94vh`；浏览器冒烟断言桌面高度 ≥ 90vh、无内联 px 高度。
+- **Wave 1 迭代（2026-10-27）**：
+  - **G01** AI 冲突报告记录 `S.tool.conflictSrc`（来源书 / 检查范围 / 基准条数），切书时在 `loadEntries` 清空并复位提示；
+    跳转前校验 uid 仍存在（`goto` action），报告头显示来源与范围。
+  - **G02** `runtime.saveSettings()` 返回宿主是否真的持久化；设置页保存失败显示「仅保存在内存（宿主没有保存接口）」。
+  - **G05** 设置页新增 `#wbe-acc-help`（三步上手 / 术语 / 全部快捷键）。
+  - **G06** 无世界书时条目页有 `#wbe-nobook` 引导、工具页显示等待世界书而非「没有问题」、导入 / 导出前置守卫、AI 页首次使用提示。
+  - **G07** 新增零依赖 `src/health-rules.js`（`classifyKeyword` / `isRedosPattern`），体检扩展正则非法 / 高危回溯 /
+    概率 0 / order 重复 / 次要关键词共用；`hit()` / `findHits()` 复用同一 ReDoS 判定。
+  - **A1** 宿主访问收口：`index.js` 改用 `runtime.getHostEventApi()` / `peekGlobalNVUI()`，`ui-contract` 静态守卫。
+  - **A2** 浏览器冒烟对 `ST_PUBLIC_DIR` / 宿主 jQuery 缺失给出可操作指引并打印实际路径；触发测试命中行可点击跳转。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

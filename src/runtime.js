@@ -143,7 +143,8 @@ function persistSettings() {
 }
 
 function publicSaveSettings() {
-  persistSettings();
+  // 返回布尔给 UI 做「已保存 / 仅保存在内存」反馈（G02）
+  return persistSettings();
 }
 
 function readLegacySettings() {
@@ -278,8 +279,9 @@ export function getSettings() {
 /** 兼容旧入口名；调用方应优先使用 getSettings()。 */
 export const ensureSettings = getSettings;
 
+/** 保存扩展设置；返回宿主是否真的提供了保存函数（false = 仅内存，UI 需如实提示）。 */
 export function saveSettings() {
-  publicSaveSettings();
+  return publicSaveSettings();
 }
 
 /**
@@ -340,6 +342,19 @@ export function getHostInfo() {
   return {
     version: version === null || version === undefined ? null : String(version),
     platform: platform === null || platform === undefined ? null : String(platform),
+  };
+}
+
+/**
+ * 宿主事件入口（APP_READY / APP_INITIALIZED）。只读 context、不缓存。
+ * index.js 的生命周期监听通过这里拿事件源，保证「只有 runtime.js 接触 getContext」。
+ */
+export function getHostEventApi() {
+  const context = getHostContext();
+  const types = context?.eventTypes || context?.event_types || {};
+  return {
+    source: context?.eventSource || null,
+    ready: types.APP_READY || 'app_ready',
   };
 }
 
@@ -414,6 +429,11 @@ function getGlobalNVUI() {
   } catch {
     return null;
   }
+}
+
+/** 只读窥视全局 NVUI（给 index.js 的「已有其它插件实例」回退用；不缓存）。 */
+export function peekGlobalNVUI() {
+  return getGlobalNVUI();
 }
 
 /**

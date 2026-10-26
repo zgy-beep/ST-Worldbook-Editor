@@ -97,3 +97,32 @@ test('missing context cannot cause an empty settings snapshot to be persisted',a
   globalThis.SillyTavern={getContext:()=>({extensionSettings:f.store,saveSettingsDebounced(){}})};
   assert.equal(f.runtime.getSettings().mode,'st');
 });
+
+test('saveSettings reports whether the host really persisted (G02)',async()=>{
+  // 1) 宿主提供 saveSettingsDebounced：返回 true，且调用计数增加
+  const normal=await fixture({st_worldbook_editor:{key:'k'}});
+  normal.runtime.getSettings();
+  const before=normal.saves;
+  assert.equal(normal.runtime.saveSettings(),true);
+  assert.ok(normal.saves>before);
+
+  // 2) 宿主没有保存接口：返回 false；内存里的设置仍然更新（UI 应据此提示「仅保存在内存」）
+  const store={st_worldbook_editor:{key:'k'}};
+  globalThis.SillyTavern={getContext:()=>({extensionSettings:store})};
+  const module=await import(`../src/runtime.js?case=${moduleId++}`);
+  const runtime=module.createRuntime();
+  const cfg=runtime.getSettings();
+  assert.equal(runtime.saveSettings(),false);
+  cfg.style='仅保存在内存';
+  assert.equal(runtime.saveSettings(),false);
+  assert.equal(store.st_worldbook_editor.style,'仅保存在内存');
+});
+
+test('host event api is exposed by runtime for the lifecycle layer (A1 boundary)',async()=>{
+  const source={on(){},removeListener(){}};
+  globalThis.SillyTavern={getContext:()=>({eventSource:source,eventTypes:{APP_READY:'app_ready'},extensionSettings:{}})};
+  const module=await import(`../src/runtime.js?case=${moduleId++}`);
+  assert.deepEqual(module.getHostEventApi(),{source,ready:'app_ready'});
+  globalThis.SillyTavern={getContext:()=>({extensionSettings:{}})};
+  assert.deepEqual(module.getHostEventApi(),{source:null,ready:'app_ready'});
+});

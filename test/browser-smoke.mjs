@@ -84,7 +84,30 @@ async function launchBrowser() {
 }
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const stPublic = process.env.ST_PUBLIC_DIR || resolve(root, '../../APP/SillyTavern/public');
-const jquery = await readFile(resolve(stPublic, 'lib/jquery-3.5.1.min.js'));
+const jqueryPath = resolve(stPublic, 'lib/jquery-3.5.1.min.js');
+let jquery;
+try {
+  jquery = await readFile(jqueryPath);
+} catch (err) {
+  // A2：换机器时默认路径不存在，不能只抛裸 ENOENT；给出与 Playwright/浏览器失败一致的排障指引。
+  console.error([
+    '',
+    '[browser-smoke] 无法读取 SillyTavern 的宿主 jQuery，冒烟测试未启动。',
+    '',
+    `尝试路径：${jqueryPath}`,
+    `原始错误：${err.code || err.message}`,
+    '',
+    '默认路径只匹配本仓库的“插件与 SillyTavern 同级”布局；换机器 / 换克隆位置时请显式设置：',
+    '       cmd       : set ST_PUBLIC_DIR=C:/path/to/SillyTavern/public',
+    '       PowerShell: $env:ST_PUBLIC_DIR="C:/path/to/SillyTavern/public"',
+    '       bash      : export ST_PUBLIC_DIR=/path/to/SillyTavern/public',
+    '',
+    '该目录下必须存在 lib/jquery-3.5.1.min.js（SillyTavern 自带）。',
+    '',
+  ].join('\n'));
+  process.exit(1);
+}
+console.log(`[browser-smoke] ST public = ${stPublic}`);
 const fixture = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/host/css/fontawesome.min.css">
@@ -145,6 +168,7 @@ window.TavernHelper = {
   generateRaw: async cfg => { calls.push(structuredClone(cfg));
     if (invalidOnce) {invalidOnce=false;return '这里是格式错误的说明文字';}
     if (replyKind==='keys') return JSON.stringify({keys:['海港','船舶']});
+    if (replyKind==='conflict') return JSON.stringify([{uid:1,severity:'warn',issue:'时间线冲突（冒烟）',details:'与条目 2 的日期矛盾',fix_suggestion:'统一年份'}]);
     if (replyKind==='text') return '港口的灯火沿着海岸延伸。';
     return '<think>先分析例子 [{"uid":999,"content":"忽略"}]</think>\\n结果如下：\\n' +
       '\u0060\u0060\u0060json\\n[{"uid":1,"content":"潮汐港是一座依海而建的繁忙港口。"}]\\n\u0060\u0060\u0060'; }
@@ -287,6 +311,33 @@ try {
   assert.ok(await page.locator('.wbe-card').count());
   assert.equal(await page.evaluate(()=>entries[0].content),'潮汐港是一座繁忙的港口。');
 
+  // G01：AI 冲突体检报告必须标明来源世界书与检查范围，且只对存在的 uid 提供跳转
+  await page.locator('#wbe-tab-tool').click();
+  await page.evaluate(()=>{ replyKind='conflict'; });
+  await page.waitForTimeout(50);
+  await page.locator('[data-a=aiconflict]').click();
+  await page.locator('#wbe-conflicts .wbe-card').first().waitFor();
+  const conflictReport = await page.evaluate(() => ({
+    text: document.querySelector('#wbe-conflicts')?.textContent || '',
+    gotoUid: document.querySelector('#wbe-conflicts [data-a=goto]')?.getAttribute('data-u') || null,
+  }));
+  assert.match(conflictReport.text, /来源《验收世界书》/, '冲突报告必须标明来源世界书');
+  assert.match(conflictReport.text, /检查范围/, '冲突报告必须标明检查范围');
+  assert.equal(conflictReport.gotoUid, '1', '有效 uid 应提供跳转按钮');
+
+  // §9.1 A2：触发测试命中行可点击跳转
+  await page.locator('[name=probe]').fill('潮汐港的船只进出港口');
+  await page.locator('#wbe-hits .wbe-hitrow').first().waitFor();
+  const hitRow = await page.evaluate(() => {
+    const row = document.querySelector('#wbe-hits .wbe-hitrow');
+    return row ? { action: row.getAttribute('data-a'), uid: row.getAttribute('data-u') } : null;
+  });
+  assert.equal(hitRow?.action, 'goto', '触发命中的行应可点击跳转');
+  assert.ok(hitRow?.uid, '触发命中的行应带条目 uid');
+  await page.locator('#wbe-hits .wbe-hitrow').first().click();
+  await page.waitForFunction(() => document.querySelector('#wbe-ebody [name=name]')?.value === '港口');
+  await page.evaluate(()=>{ replyKind='batch'; });
+
   // 切 tab 不应重建 DOM：破限页节点在来回切换后必须是同一个引用
   await page.locator('#wbe-tab-set').click();
   await page.locator('#wbe-tab-jb').click();
@@ -295,6 +346,10 @@ try {
 
   // 诊断日志：设置页有图形入口；全局 error 会进缓冲；敏感字段必须脱敏。
   await page.locator('#wbe-tab-set').click();
+  // G05：帮助与快捷键入口
+  await page.locator('#wbe-acc-help .nvui-acc-head').click();
+  await page.waitForFunction(() => document.querySelector('#wbe-acc-help')?.classList.contains('is-open'));
+  assert.match(await page.locator('#wbe-acc-help').textContent(), /快捷键/, '帮助区应包含快捷键说明');
   await page.locator('#wbe-acc-diag .nvui-acc-head').click();
   assert.ok(await page.locator('#wbe-acc-diag').evaluate(el => el.classList.contains('is-open')),
     '诊断日志折叠条应能展开');

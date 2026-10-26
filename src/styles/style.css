@@ -632,3 +632,12 @@
     font-size: var(--nvui-fs-2xs);
     white-space: pre-wrap;
 }
+
+/* 触发测试命中行可点击跳转（§9.1 A2） */
+#wbe-overlay .wbe-hitrow[data-a] {
+    cursor: pointer;
+}
+
+#wbe-overlay .wbe-hitrow[data-a]:hover {
+    background: var(--nvui-block-bg);
+}

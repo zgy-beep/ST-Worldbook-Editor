@@ -15,6 +15,16 @@
 - **NVUI Kit 升级到 v2.8.0**：内置上游 v2.8.0 资产（含 v2.7.1 / v2.7.2 的玻璃透明感与浏览器回归稳定性修复）；启动接入 `NVUI.selfCheck` 做版本 / CSS 自检。
 - **修复**：工具页「查找替换」两行按钮垂直间距 `0px`（补 `wbe-mt-2`）；`toastr` 缺失时操作反馈回退不再抛错。
 
+### 0.8.x 迭代（未发布）
+
+- **AI 冲突报告可信度**：报告标注「来源世界书 + 检查范围（勾选 N 条 / 未勾选取前 N 条）」，切换世界书自动清空旧报告，跳转前校验 uid 是否仍存在。
+- **保存结果可见**：宿主没有保存接口时，设置页如实提示「仅保存在内存（宿主没有保存接口）」，不再一律显示「已保存」。
+- **宿主访问收口**：`src/index.js` 不再直接碰 `SillyTavern.getContext()`，统一走 `runtime.getHostEventApi()` / `peekGlobalNVUI()`，并有静态守卫测试。
+- **帮助与快捷键**：设置页新增「帮助与快捷键」（三步上手 / 术语表 / 全部快捷键）。
+- **空态与错误引导**：无世界书时条目页给出显式引导、工具页不再显示误导性的「没有发现明显问题」、导入 / 导出 / 体检都有前置守卫。
+- **体检规则扩展**：新增正则关键词非法 / 高危回溯 / 概率为 0 / order 值重复 / 次要关键词共用检查（复用零依赖 `src/health-rules.js`，Node 单测覆盖）。
+- **触发测试**：命中行可直接点击跳转；浏览器冒烟在缺失 `ST_PUBLIC_DIR` 时给出可操作的设置指引。
+
 ### 0.7.0 更新摘要（历史）
 
 - **保存为自定义预设**：把当前破限前置 / 后置消息完整另存为命名模板，下拉列表按「内置预设 / 自定义预设」分组；套用与保存都使用独立副本，之后继续编辑不会改到内置常量或已保存模板。
@@ -32,8 +42,9 @@
 - **批量操作**：多选、批量启用/禁用、批量分组、调整顺序、深度与触发概率。
 - **双向数据兼容**：兼容 SillyTavern 原生条目的 `disable`、`constant`、`selective`、`vectorized`、数值型 `position`，并在需要时映射到新的 `strategy` / `position` 结构。
 - **拖拽排序**：通过 `displayIndex` / `display_index` 与 `order` 维护条目顺序。
-- **世界书体检**：孤岛设定、关键词重叠、触发仿真、潜在冲突扫描。
-- **AI 辅助**：对选中条目或整本世界书执行扩写、重写、润色、拆分与冲突检查；结果先进入 Diff 预览，不会自动写入。
+- **世界书体检**：孤岛设定、关键词重叠、触发仿真、潜在冲突扫描；并检查正则关键词非法 / 高危回溯、概率为 0、order 重复、次要关键词共用。
+- **AI 辅助**：对选中条目或整本世界书执行扩写、重写、润色、拆分与冲突检查；结果先进入 Diff 预览，不会自动写入；冲突报告标注来源世界书与检查范围。
+- **帮助与快捷键**：设置页内置「三步上手 / 术语表 / 快捷键」入口。
 - **安全加固**：动态内容转义、危险正则拦截、AI 结果与来源世界书绑定、路径穿越过滤、保存互斥与撤销。
 - **诊断日志与排障**：启动、宿主读写、AI 请求、导入导出与兜底异常统一记录到内存日志；「设置 → 诊断日志与排障」可一键复制 / 下载，
   API Key 等敏感字段自动脱敏，数据不上传（详见下文「诊断日志与排障」）。
@@ -59,8 +70,8 @@
 扩展管理器会读取 `manifest.json` 并按标准扩展流程加载 `src/index.js` 与 `src/styles/style.css`。
 
 > **分支选择**：日常使用推荐 **`release` 分支**，它只保留扩展运行时；需要测试、审计与开发资料时用 **`main` 分支**。
-> `release` 包含 `manifest.json`、`LICENSE`、`README.md`、`src/` 下 6 个 JS
-> （`index.js`、`runtime.js`、`Worldbook-Editor.js`、`worldbook-api.js`、`ai-prompts.js`、`jb-presets.js`）
+> `release` 包含 `manifest.json`、`LICENSE`、`README.md`、`src/` 下 8 个 JS
+> （`index.js`、`runtime.js`、`Worldbook-Editor.js`、`worldbook-api.js`、`ai-prompts.js`、`jb-presets.js`、`logger.js`、`health-rules.js`）
 > 与 2 个 CSS（`styles/style.css`、`styles/host-isolation.css`），以及 `ui-kit/` 的
 > `nvui-api.js`、`tokens.css`、`components.css`。
 > 酒馆的扩展管理器原生支持分支切换（扩展卡片上的 **Switch branch**），
@@ -325,6 +336,7 @@ ST-Worldbook-Editor/
 │  ├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
 │  ├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
 │  ├─ jb-presets.js          # 破限预设/自定义保存校验纯函数（零运行时）
+│  ├─ health-rules.js        # 体检/关键词触发规则纯函数（零依赖，Node 可测）
 │  ├─ logger.js              # 诊断日志（零依赖叶子模块：内存环形缓冲 + 脱敏）
 │  └─ styles/
 │     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
@@ -477,6 +489,7 @@ git checkout release
 git restore --source main --staged --worktree -- manifest.json LICENSE README.md \
   src/index.js src/runtime.js src/Worldbook-Editor.js \
   src/worldbook-api.js src/ai-prompts.js src/jb-presets.js \
+  src/logger.js src/health-rules.js \
   src/styles/style.css src/styles/host-isolation.css \
   ui-kit/nvui-api.js ui-kit/tokens.css ui-kit/components.css ui-kit/LICENSE
 git commit -m "chore: 同步运行时代码到 release 分支"

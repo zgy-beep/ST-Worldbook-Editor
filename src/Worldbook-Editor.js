@@ -1,5 +1,6 @@
 // 世界书编辑器 v0.8.0 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON } from './ai-prompts.js';
+import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
 import { createWorldbookApi } from './worldbook-api.js';
 import {
@@ -92,6 +93,7 @@ export function initializeEditor(runtime) {
     ['拆分设定', '把下面的设定文本拆分成多个条目，每个条目只讲一个主题，并配好关键词：\n', 'new'],
     ['冲突体检', '审查选定条目与全书其他设定是否存在逻辑冲突、死循环、时间线矛盾或设定吃书，指出矛盾条目与修改建议：\n'],
   ];
+  const CONFLICT_STATUS_HINT = '检查跨条目的生卒状态、阵营归属、时序冲突及专有名词不一致';
   const TABS = [
     ['entries', '条目', 'fa-book'],
     ['ai', 'AI', 'fa-wand-magic-sparkles'],
@@ -101,7 +103,7 @@ export function initializeEditor(runtime) {
   ];
   const S = {
     books: [], book: '', entries: [], sel: null, checked: new Set(), q: '', flt: 'all', groupFlt: 'all', sort: 'idx', tab: 'entries', view: 'edit', dirty: false, undo: [], models: [],
-    tool: { find: '', rep: '', re: false, probe: '', f: { content: true, keys: false, name: false }, aiConflicts: [] },
+    tool: { find: '', rep: '', re: false, probe: '', f: { content: true, keys: false, name: false }, aiConflicts: [], conflictSrc: null },
     ai: { instr: '', scope: 'cur', f: { content: true, keys: true, name: false }, ctx: true, results: [], busy: false, cancel: false, status: '' },
     jbPresetSel: '',
   };
@@ -115,10 +117,12 @@ export function initializeEditor(runtime) {
   log.setLevel(CFG.debug ? 'debug' : 'info');
   const saveCfg = () => {
     try {
-      runtime.saveSettings();
+      // G02：宿主是否真的提供保存接口，UI 要如实反馈（false = 仅保存在内存）
+      return runtime.saveSettings() !== false;
     } catch (err) {
       logSet.warn('扩展设置保存失败', err);
       toast.error('设置保存失败：' + (err.message || err));
+      return false;
     }
   };
   if (CFG.sort) S.sort = CFG.sort;
@@ -314,7 +318,7 @@ export function initializeEditor(runtime) {
     if (!k || !t) return false;
     const m = k.match(/^\/(.+)\/([gimsuy]*)$/);
     if (!m) return (tLower !== undefined ? tLower : t.toLowerCase()).includes(k.toLowerCase());
-    if (/(\+|\*|\{[0-9, ]+\})\s*\)?\s*(\+|\*|\{[0-9, ]+\})/.test(m[1])) {
+    if (isRedosPattern(m[1])) {
       log.warn('拦截潜在 ReDoS 高危正则', { pattern: m[1] });
       return false;
     }
@@ -344,6 +348,13 @@ export function initializeEditor(runtime) {
     const entries = S.book ? await apiGetEntries(S.book) : [];
     S.entries = Array.isArray(entries) ? entries : [];
     log.debug('条目已加载', { book: S.book || '（未选择）', count: S.entries.length });
+    // G01：切书后旧书生成的冲突报告不再可信，清空报告与来源标记并复位状态文案
+    if (S.tool.conflictSrc && S.tool.conflictSrc.book !== S.book) {
+      S.tool.aiConflicts = [];
+      S.tool.conflictSrc = null;
+      const cfStatus = $('#wbe-cf-status', root);
+      if (cfStatus.length) cfStatus.text(CONFLICT_STATUS_HINT);
+    }
     keep ? [...S.checked].forEach(u => S.entries.some(e => String(e.uid) === String(u)) || S.checked.delete(u)) : S.checked.clear();
     if (S.book && CFG.lastBook !== S.book) { CFG.lastBook = S.book; saveCfg(); }
     if (!cur()) S.sel = S.entries[0]?.uid ?? null;
@@ -758,6 +769,14 @@ ${GUIDE}
           <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style || '')}</textarea></label>
         </div></div>
       </div>
+      <div class="nvui-acc" id="wbe-acc-help">
+        <button type="button" class="nvui-acc-head" aria-expanded="false"><span class="nvui-acc-title">${ico('fa-circle-question')}帮助与快捷键</span><span class="nvui-acc-summary">新手三步 · 术语 · 快捷键</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <p class="nvui-hint"><b>三步上手</b>：① 在「条目」页选择或新建世界书 → ② 新建条目（或选一个模板），填标题 / 关键词 / 内容并保存 → ③ 到「工具」页跑体检与触发测试，再到「AI」页让模型帮你改。</p>
+          <p class="nvui-hint"><b>快捷键</b>：Ctrl / Cmd + S 保存条目；Ctrl / Cmd + Enter 在 AI 页生成；Alt + N 新建条目；Alt + ↑ / ↓ 上一条 / 下一条；Alt + Shift + ↑ / ↓ 在可拖拽排序模式下调换顺序。</p>
+          <p class="nvui-hint"><b>术语</b>：常驻 = 每轮都注入；选择性 = 命中主 / 次关键词才注入；向量化 = 按向量相似度检索；位置 / 深度 / order 决定注入顺序；概率 = 每次触发前的掷骰。</p>
+        </div></div>
+      </div>
       <div class="nvui-acc" id="wbe-acc-diag">
         <button type="button" class="nvui-acc-head" aria-expanded="false"><span class="nvui-acc-title">${ico('fa-bug')}诊断日志与排障</span><span class="nvui-acc-summary" id="wbe-logsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -801,7 +820,8 @@ ${GUIDE}
       if (n === 's_model' && CFG.mode === 'custom') $('#wbe-modesum', root).text(CFG.model || '自定义 API');
       if (n === 's_model' || n === 's_apiurl') refreshAIMeta();
     }
-    saveCfg(); $('#wbe-setmsg', root).text('已保存');
+    const persisted = saveCfg();
+    $('#wbe-setmsg', root).text(persisted ? '已保存' : '仅保存在内存（宿主没有保存接口）');
   }
   function toolHTML() {
     const t = S.tool;
@@ -829,7 +849,7 @@ ${GUIDE}
           <div id="wbe-health"></div>
           <div class="wbe-bar wbe-mt-2">
             <button type="button" class="nvui-btn is-secondary" data-a="aiconflict">${ico('fa-wand-magic-sparkles')}AI 深度事实矛盾与冲突审查</button>
-            <span class="nvui-hint" id="wbe-cf-status">检查跨条目的生卒状态、阵营归属、时序冲突及专有名词不一致</span>
+            <span class="nvui-hint" id="wbe-cf-status">${CONFLICT_STATUS_HINT}</span>
           </div>
           <div id="wbe-conflicts"></div>
         </div></div>
@@ -842,7 +862,7 @@ ${GUIDE}
   }
   function findHits() {
     const t = S.tool; if (!t.find) return [];
-    if (t.re && /(\+|\*|\{[0-9, ]+\})\s*\)?\s*(\+|\*|\{[0-9, ]+\})/.test(t.find)) {
+    if (t.re && isRedosPattern(t.find)) {
       toast.error('检测到潜在高危回溯正则，已拦截');
       return [];
     }
@@ -858,7 +878,7 @@ ${GUIDE}
     return out;
   }
   function health() {
-    const out = [], km = {}, nm = {};
+    const out = [], km = {}, nm = {}, om = {}, sm = {};
     const uidMap = new Map(S.entries.map(e => [e.uid, e]));
     const nameOf = u => A.name(uidMap.get(u)) || '（无标题）';
     const commonWords = new Set(['他', '她', '它', '他们', '这个', '那个', '因为', '并且', '你', '我', 'the', 'this', 'that', 'he', 'she', 'it']);
@@ -869,6 +889,13 @@ ${GUIDE}
       if (!(e.content || '').trim()) out.push([e.uid, '内容为空', n, 'danger']);
       if (t !== 'constant' && !keys.length) out.push([e.uid, '没有触发关键词，永远不会触发', n, 'warn']);
       if (k > 800) out.push([e.uid, `内容较长（约 ${k} tokens），建议精简或拆分`, n, 'info']);
+      // G07：正则形态关键词的语法 / ReDoS / 概率 0 检查（全部只读，不修改条目）
+      keys.forEach(x => {
+        const kind = classifyKeyword(x);
+        if (kind === 'redos') out.push([e.uid, `触发关键词「${x}」含高危回溯正则，运行时会被拦截`, n, 'danger']);
+        else if (kind === 'invalid-regex') out.push([e.uid, `触发关键词「${x}」不是合法正则，永远不会触发`, n, 'danger']);
+      });
+      if (A.prob(e) === 0) out.push([e.uid, '触发概率为 0，永远不会触发', n, 'warn']);
       const dangerous = keys.filter(x => commonWords.has(x.toLowerCase()));
       if (dangerous.length && !A.keysSec(e).length) out.push([e.uid, `含高危泛用词「${dangerous.join('、')}」，容易误触，建议配置次要关键词`, n, 'danger']);
       if (t !== 'constant' && keys.length) {
@@ -882,14 +909,25 @@ ${GUIDE}
       }
       (nm[n] ??= []).push(e.uid);
       if (t !== 'constant') new Set(keys.map(x => x.toLowerCase())).forEach(x => (km[x] ??= []).push(e.uid));
+      if (t !== 'constant') new Set(A.keysSec(e).map(x => String(x).toLowerCase()).filter(Boolean)).forEach(x => (sm[x] ??= []).push(e.uid));
+      (om[A.order(e)] ??= []).push(e.uid);
     });
     for (const n in nm) if (nm[n].length > 1) nm[n].forEach(u => out.push([u, `标题重复（${nm[n].length} 条）`, n, 'warn']));
     for (const x in km) if (km[x].length > 1) km[x].forEach(u => out.push([u, `关键词「${x}」被 ${km[x].length} 个条目共用`, nameOf(u), 'warn']));
+    for (const x in sm) if (sm[x].length > 1) sm[x].forEach(u => out.push([u, `次要关键词「${x}」被 ${sm[x].length} 个条目共用`, nameOf(u), 'info']));
+    for (const o in om) if (om[o].length > 1) om[o].forEach(u => out.push([u, `order 值重复（${om[o].length} 条），拖拽排序语义可能不稳定`, nameOf(u), 'info']));
     return out;
   }
   function refreshTool() {
     const healthBox = $('#wbe-health', root);
     if (!healthBox.length) return;
+    if (!S.book) {
+      // G06：无世界书时不要显示「没有发现明显问题」这种误导性的绿色通过
+      $('#wbe-hsum', root).text('等待世界书');
+      healthBox.html('<div class="nvui-alert is-warn"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>还没有世界书：请先在「条目」页选择或新建一本，体检与触发测试才有对象。</span></div>');
+      renderConflicts();
+      return;
+    }
     const on = S.entries.filter(e => A.enabled(e)), h = health(), sum = l => l.reduce((s, e) => s + tokE(e), 0);
     $('#wbe-hsum', root).text(h.length ? `${h.length} 项关注` : '无明显问题');
     const badgeMap = { danger: 'is-danger', warn: 'is-warn', info: 'is-info' };
@@ -901,13 +939,23 @@ ${GUIDE}
   function renderConflicts() {
     const cfs = S.tool.aiConflicts || [];
     if (!cfs.length) { $('#wbe-conflicts', root).html(''); return; }
-    $('#wbe-conflicts', root).html(`<div class="wbe-card wbe-card-danger"><div class="wbe-ahd"><span class="nvui-badge is-danger">AI 冲突体检报告</span><b>发现 ${cfs.length} 处潜在矛盾</b></div>` +
-      cfs.map(c => `<div class="wbe-card wbe-mt-1">
+    // G01：报告必须显示来源世界书与检查范围，避免把旧书结论当当前书结论
+    const src = S.tool.conflictSrc;
+    const scope = src
+      ? `来源《${esc(src.book)}》 · 检查范围：${src.checked ? `已勾选 ${src.checked} 条` : `未勾选取前 ${src.scanned} 条`}`
+        + `（基准概览 ${src.baseline} 条；概率 / 递归 / 向量化未模拟）`
+      : '来源未知（旧报告或未记录来源），建议重新审查';
+    $('#wbe-conflicts', root).html(`<div class="wbe-card wbe-card-danger"><div class="wbe-ahd"><span class="nvui-badge is-danger">AI 冲突体检报告</span><b>发现 ${cfs.length} 处潜在矛盾</b></div>
+      <div class="nvui-hint wbe-my-1">${scope}</div>` +
+      cfs.map(c => {
+        const uidValid = c.uid != null && S.entries.some(e => String(e.uid) === String(c.uid));
+        return `<div class="wbe-card wbe-mt-1">
         <div class="wbe-ln"><span class="nvui-badge ${c.severity === 'danger' ? 'is-danger' : 'is-warn'}">${c.severity === 'danger' ? '严重事实矛盾' : '潜在冲突'}</span> <b>${esc(c.issue || '设定冲突')}</b></div>
         <div class="nvui-hint wbe-my-1">${esc(c.details || '')}</div>
         <div class="wbe-ln wbe-fix"><b>建议方案：</b>${esc(c.fix_suggestion || '请根据上下文核实设定')}</div>
-        ${c.uid != null ? `<button type="button" class="nvui-btn is-sm is-ghost" data-a="goto" data-u="${esc(c.uid)}">跳转至该条目修复</button>` : ''}
-      </div>`).join('') + '</div>');
+        ${uidValid ? `<button type="button" class="nvui-btn is-sm is-ghost" data-a="goto" data-u="${esc(c.uid)}">跳转至该条目修复</button>` : (c.uid != null ? '<span class="nvui-hint">该条目已不存在，无法跳转</span>' : '')}
+      </div>`;
+      }).join('') + '</div>');
   }
   let probeTimer = null;
   function scheduleTest() {
@@ -921,7 +969,7 @@ ${GUIDE}
     const hits = S.entries.filter(e => A.enabled(e) && (A.type(e) === 'constant' || A.keys(e).some(k => k && hit(k, t, tLower)))).sort((a, b) => A.order(b) - A.order(a));
     $('#wbe-ptsum', root).text(t ? `命中 ${hits.length} 条` : '');
     $('#wbe-hits', root).html(t ? `<p class="nvui-hint">命中 ${hits.length} 条，约 ${hits.reduce((s, e) => s + tokE(e), 0)} tokens</p>` +
-      hits.map(e => `<div class="wbe-hitrow ${(TYPE[A.type(e)] || [])[1] || ''}">${esc(A.name(e))} <span class="nvui-muted">#${esc(A.order(e))}</span></div>`).join('') : '');
+      hits.map(e => `<div class="wbe-hitrow ${(TYPE[A.type(e)] || [])[1] || ''}" data-a="goto" data-u="${esc(e.uid)}">${esc(A.name(e))} <span class="nvui-muted">#${esc(A.order(e))}</span></div>`).join('') : '');
   }
 
   // ---------- 拖拽排序 ----------
@@ -1029,6 +1077,8 @@ ${GUIDE}
     const gOpts = `<option value="all">全部分组</option><option value="__ungrouped__">未分组</option>` + groups.map(g => `<option value="${esc(g)}" ${g === S.groupFlt ? 'selected' : ''}>${esc(g)}</option>`).join('');
     $('#wbe-gflt', root).html(gOpts).val(S.groupFlt || 'all');
     $('#wbe-flt', root).val(S.flt); $('#wbe-sort', root).val(S.sort); $('#wbe-tpl', root).val(CFG.tpl || 'blank');
+    // G06：没有任何世界书时给显式引导，而不是让用户对空列表猜
+    $('#wbe-nobook', root).prop('hidden', S.books.length > 0);
   }
   function matchQuery(e, q) {
     if (!q) return true;
@@ -1167,6 +1217,7 @@ ${GUIDE}
       </div>
       <label class="nvui-switch-row wbe-swbare"><input type="checkbox" name="ctx" ${a.ctx ? 'checked' : ''}><span>附带背景：其他条目的标题/关键词，以及 2 个现有条目作为风格参考（更连贯，但多耗 token）</span></label>
       <p class="nvui-hint"><span id="wbe-apihint">当前接口：${CFG.mode === 'custom' ? esc(CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'}</span> <button type="button" class="nvui-btn is-sm is-ghost" data-a="gset">去设置</button>　AI 的结果不会直接写入，需要你逐项检查后点「应用」。快捷键 Ctrl+Enter 生成。</p>
+      <p class="nvui-hint">首次使用：选范围（当前条目 / 已勾选 / 全部 / 新建）→ 写清「你想怎么改」→ 生成后逐条检查 Diff，再点「应用所选」。</p>
       <div id="wbe-ai-out"></div></div>`;
   }
   /**
@@ -1684,7 +1735,14 @@ ${GUIDE}
       toast.info(CFG.debug ? '已开启详细日志（debug）' : '已恢复普通日志（info）');
     },
     more() { S.limit += 300; renderList(); },
-    goto(el) { if (!guard()) return; goEdit(+el.data('u')); renderList(); },
+    goto(el) {
+      if (!guard()) return;
+      const uid = +el.data('u');
+      if (!S.entries.some(e => String(e.uid) === String(uid))) {
+        return toast.warning('该条目不存在（可能已删除或切换了世界书）');
+      }
+      goEdit(uid); renderList();
+    },
     async setmodels() {
       const base = CFG.apiurl.replace(/\/+$/, ''); if (!base) return toast.warning('先填写接口地址');
       if (CFG.key && base.startsWith('http://') && !base.includes('localhost') && !base.includes('127.0.0.1')) {
@@ -1778,6 +1836,13 @@ ${GUIDE}
         const targetData = S.entries.filter(e => targetUids.includes(e.uid)).map(e => `【待检条目 UID:${e.uid} 《${A.name(e)}》】\n${e.content}`).join('\n\n');
         const r = await askJSON(CONFLICT_SYS, `【世界书基准概览】\n${brief}\n\n【重点检测目标】\n${targetData}\n\n请检测重点目标与基准概览之间是否存在逻辑硬伤与事实冲突：`);
         S.tool.aiConflicts = Array.isArray(r) ? r : [r];
+        // G01：记录报告来源与检查范围（切书后 loadEntries 会据此清空报告）
+        S.tool.conflictSrc = {
+          book: S.book,
+          checked: S.checked.size,
+          scanned: targetUids.length,
+          baseline: Math.min(S.entries.length, 150),
+        };
         st.text(S.tool.aiConflicts.length ? `发现 ${S.tool.aiConflicts.length} 处潜在矛盾` : '未发现明显冲突');
         renderConflicts();
       } catch (err) { st.text(''); toast.error('审查失败：' + (err.message || err)); }
@@ -1898,6 +1963,7 @@ ${GUIDE}
       await apiDeleteBook(S.book); S.book = ''; await loadBooks();
     },
     export() {
+      if (!S.book) return toast.warning('请先选择或新建世界书');
       const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
       const a = D.createElement('a');
       a.href = W.URL.createObjectURL(new Blob([JSON.stringify(S.entries, null, 2)], { type: 'application/json' }));
@@ -1905,6 +1971,7 @@ ${GUIDE}
       logIO.info('导出条目（JSON）', { book: S.book || '（未选择）', count: S.entries.length });
     },
     exportcsv() {
+      if (!S.book) return toast.warning('请先选择或新建世界书');
       const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
       const a = D.createElement('a');
       a.href = W.URL.createObjectURL(new Blob([CSV.stringify(S.entries)], { type: 'text/csv;charset=utf-8;' }));
@@ -1912,6 +1979,7 @@ ${GUIDE}
       logIO.info('导出条目（CSV）', { book: S.book || '（未选择）', count: S.entries.length });
     },
     import() {
+      if (!S.book) return toast.warning('请先选择或新建世界书，再导入条目');
       const f = $('<input type="file" accept=".json,.csv">', D);
       f.on('change', async () => {
         try {
@@ -2063,6 +2131,7 @@ ${GUIDE}
         </div>
         <div class="wbe-bar"><span class="nvui-hint" id="wbe-count"></span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="undo">${ico('fa-rotate-left')}撤销</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="selall">全选 / 取消</button></div>
         <div id="wbe-hint" class="nvui-hint"></div>
+        <div id="wbe-nobook" class="nvui-alert is-warn" hidden><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>还没有世界书：点上方「+」新建一本，然后就可以新建条目或从模板开始。</span></div>
         <div id="wbe-items" class="wbe-items"></div>
       </div>
       <div class="wbe-edit">

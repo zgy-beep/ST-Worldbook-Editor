@@ -144,3 +144,45 @@ test('module and asset paths stay resolvable after the src/ reorganisation',()=>
     assert.ok(onDisk(target),`断链：${file} -> ${spec}`);
   }
 });
+
+test('host access stays inside runtime.js and Wave 1 safeguards are wired',()=>{
+  // A1：只有 runtime.js 可以直接访问 SillyTavern.getContext()
+  const stripJsComments=source=>source
+    .replace(/\/\*[\s\S]*?\*\//g,'')
+    .replace(/(^|\n)[ \t]*\/\/[^\n]*/g,'$1');
+  const srcFiles=['src/index.js','src/runtime.js','src/Worldbook-Editor.js','src/ai-prompts.js','src/jb-presets.js','src/worldbook-api.js','src/health-rules.js','src/logger.js'];
+  for(const file of srcFiles){
+    if(file==='src/runtime.js') continue;
+    assert.doesNotMatch(stripJsComments(read(file)),/globalThis\.SillyTavern|SillyTavern\.getContext/,
+      `${file} 不应直接访问宿主 context，请通过 runtime.js`);
+  }
+  assert.match(read('src/runtime.js'),/export function getHostEventApi/);
+  assert.match(read('src/index.js'),/getHostEventApi/);
+  assert.match(read('src/index.js'),/peekGlobalNVUI/);
+
+  // G02：保存结果可见（宿主没有保存接口时 UI 如实提示）
+  assert.match(read('src/runtime.js'),/return persistSettings\(\)/);
+  assert.match(read('src/Worldbook-Editor.js'),/仅保存在内存/);
+
+  // G01：冲突报告来源绑定 + 跳转前 uid 校验
+  const editor=read('src/Worldbook-Editor.js');
+  assert.match(editor,/conflictSrc/);
+  assert.match(editor,/来源《/);
+  assert.match(editor,/该条目不存在/);
+
+  // G05 / G06：帮助入口、无书引导、导入导出守卫、AI 首次使用提示
+  assert.match(editor,/wbe-acc-help/);
+  assert.match(editor,/wbe-nobook/);
+  assert.match(editor,/请先选择或新建世界书/);
+  assert.match(editor,/首次使用/);
+
+  // §9.1 A2：触发命中行可跳转
+  assert.match(editor,/wbe-hitrow[^`]*data-a="goto"/);
+
+  // G07：体检规则复用零依赖纯函数模块
+  assert.match(editor,/from '\.\/health-rules\.js'/);
+  const rules=read('src/health-rules.js');
+  assert.doesNotMatch(rules,/^\s*import\s/m);
+  assert.match(rules,/invalid-regex/);
+  assert.match(rules,/redos/);
+});
