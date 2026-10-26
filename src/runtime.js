@@ -9,6 +9,10 @@
  * - 只写自己的命名空间，不触碰其它扩展设置，也不遍历清理任意 `wbe_*` 键。
  */
 
+import { getLogger } from './logger.js';
+
+const log = getLogger().child('runtime');
+
 export const EXTENSION_NAME = 'st_worldbook_editor';
 export const LEGACY_SETTINGS_KEY = 'wbe_settings_v1';
 
@@ -31,6 +35,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   jbPost: [],
   // 用户另存的自定义预设；元素形状 { id, name, pre, post }，与 layout 分开
   jbCustomPresets: [],
+  // 诊断日志：开启后记录 debug 级（AI 请求元信息、保存/加载细节等），默认关闭
+  debug: false,
 });
 
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
@@ -40,11 +46,8 @@ let migrationChecked = false;
 let warnedNoContext = false;
 
 function warn(...args) {
-  try {
-    console.warn('[ST-Worldbook-Editor/runtime]', ...args);
-  } catch {
-    /* 忽略 */
-  }
+  // 统一进诊断日志（控制台镜像由 logger 负责，前缀仍是 [ST-Worldbook-Editor/runtime]）
+  log.warn(args[0], args.length > 2 ? args.slice(1) : args[1]);
 }
 
 function isObject(value) {
@@ -267,6 +270,7 @@ export function getSettings() {
 
   const saved = changed ? persistSettings() : true;
   if (legacyToRemove && saved) removeLegacySettings();
+  if (changed) log.info('扩展设置已初始化或补全默认值', { legacyMigrated: legacyToRemove, saved });
 
   return settings;
 }
@@ -324,6 +328,21 @@ export function getHelper() {
   }
 }
 
+/**
+ * 宿主环境快照（只读，供诊断日志 / 问题反馈使用）。
+ * 只读 context 上已有的版本字段，不探测内部模块，也不改变任何状态。
+ */
+export function getHostInfo() {
+  const context = getHostContext();
+  if (!context) return { version: null, platform: null };
+  const version = context.version ?? context.tavernVersion ?? null;
+  const platform = context.platform ?? null;
+  return {
+    version: version === null || version === undefined ? null : String(version),
+    platform: platform === null || platform === undefined ? null : String(platform),
+  };
+}
+
 function isSafeLayoutKey(key) {
   return typeof key === 'string' && key.length > 0 && !BLOCKED_LAYOUT_KEYS.has(key);
 }
@@ -334,9 +353,9 @@ function normalizeLayoutKey(key) {
 }
 
 /**
- * NVUI Kit v2.7.0 的 StorageAdapter 实现。
+ * NVUI Kit v2.8.0 的 StorageAdapter 实现。
  *
- * 已核对本地 ui-kit/nvui-api.js：
+ * 已核对本地 ui-kit/nvui-api.js（v2.8.0，未改持久化格式）：
  * - persist 读取使用 get(key) / set(key, value)；
  * - clearLayoutState 优先调用 delete(key)，没有 delete 时才退回 set(key, null)。
  *
@@ -406,6 +425,7 @@ function getGlobalNVUI() {
  *   saveSettings: typeof saveSettings,
  *   resetSettings: typeof resetSettings,
  *   getHelper: typeof getHelper,
+ *   getHostInfo: typeof getHostInfo,
  *   layoutStorage: typeof layoutStorage,
  *   NVUI: object|null,
  *   EXTENSION_NAME: string
@@ -419,6 +439,7 @@ export function createRuntime(options = {}) {
     saveSettings,
     resetSettings,
     getHelper,
+    getHostInfo,
     layoutStorage,
     get NVUI() {
       return injectedNVUI || getGlobalNVUI();

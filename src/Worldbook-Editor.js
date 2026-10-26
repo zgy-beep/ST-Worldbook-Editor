@@ -1,5 +1,6 @@
-// 世界书编辑器 v0.7.0 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.8.0 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON } from './ai-prompts.js';
+import { getLogger } from './logger.js';
 import { createWorldbookApi } from './worldbook-api.js';
 import {
   BUILTIN_JB_PRESETS,
@@ -17,15 +18,43 @@ import {
 export function initializeEditor(runtime) {
   const W = window, D = W.document, $ = W.jQuery;
   let NVUI = null;
+  // 诊断日志：所有可预期失败都从这里落一条，用户可在「设置 → 诊断日志」一键复制/下载
+  const log = getLogger().child('editor');
+  const logAI = log.child('ai');
+  const logIO = log.child('io');
+  const logSet = log.child('settings');
   async function ensureNVUI() {
     const api = runtime.NVUI;
-    if (!api || api.version !== '2.7.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.7.0');
+    if (!api || api.version !== '2.8.0' || typeof api.createPanel !== 'function') throw new Error('需要本地 NVUI Kit 2.8.0');
     NVUI = api;
     return api;
   }
   // 操作反馈走 NVUI 吐司（top-layer，能显示在面板之上）；Kit 未加载时回退 toastr
   const toast = {
-    show(m, type, icon) { NVUI ? NVUI.showToast({ message: m, type, icon }) : toastr[type === 'danger' ? 'error' : type || 'info'](m); },
+    show(m, type, icon) {
+      if (NVUI) {
+        try {
+          NVUI.showToast({ message: m, type, icon });
+          return;
+        } catch (err) {
+          log.warn('NVUI 吐司失败，回退 toastr', err);
+        }
+      }
+      const host = globalThis.toastr;
+      try {
+        if (host) {
+          const method = host[type === 'danger' ? 'error' : type] || host.info;
+          if (typeof method === 'function') {
+            method.call(host, m);
+            return;
+          }
+        }
+      } catch (err) {
+        log.warn('toastr 回退失败', err);
+      }
+      // 两种宿主反馈都不可用时，至少让诊断日志留痕（不再裸 console）
+      log.info(String(m));
+    },
     success(m) { toast.show(m, 'success', 'fa-solid fa-circle-check'); },
     error(m) { toast.show(m, 'danger', 'fa-solid fa-circle-exclamation'); },
     warning(m) { toast.show(m, 'warn', 'fa-solid fa-triangle-exclamation'); },
@@ -82,7 +111,16 @@ export function initializeEditor(runtime) {
   let capKey = null, capClick = null;
   let qTimer = null, dragCleanup = null;
   const CFG = runtime.getSettings();
-  const saveCfg = () => { try { runtime.saveSettings(); } catch (err) { toast.error('设置保存失败：' + (err.message || err)); } };
+  // 「设置 → 诊断日志 → 详细日志」开关：debug 打开才记录请求元信息等细节
+  log.setLevel(CFG.debug ? 'debug' : 'info');
+  const saveCfg = () => {
+    try {
+      runtime.saveSettings();
+    } catch (err) {
+      logSet.warn('扩展设置保存失败', err);
+      toast.error('设置保存失败：' + (err.message || err));
+    }
+  };
   if (CFG.sort) S.sort = CFG.sort;
   if (CFG.flt) S.flt = CFG.flt;
   if (CFG.groupFlt) S.groupFlt = CFG.groupFlt;
@@ -277,7 +315,7 @@ export function initializeEditor(runtime) {
     const m = k.match(/^\/(.+)\/([gimsuy]*)$/);
     if (!m) return (tLower !== undefined ? tLower : t.toLowerCase()).includes(k.toLowerCase());
     if (/(\+|\*|\{[0-9, ]+\})\s*\)?\s*(\+|\*|\{[0-9, ]+\})/.test(m[1])) {
-      console.warn('[WBE] 拦截潜在 ReDoS 高危正则:', m[1]);
+      log.warn('拦截潜在 ReDoS 高危正则', { pattern: m[1] });
       return false;
     }
     try { return new RegExp(m[1], m[2]).test(t); } catch { return false; }
@@ -299,11 +337,13 @@ export function initializeEditor(runtime) {
     S.books = Array.isArray(books) ? books : [];
     if (!S.book && CFG.lastBook) S.book = CFG.lastBook;
     if (!S.books.includes(S.book)) S.book = S.books[0] || '';
+    log.debug('世界书列表已加载', { count: S.books.length, current: S.book || '（未选择）' });
     await loadEntries();
   }
   async function loadEntries(keep) {
     const entries = S.book ? await apiGetEntries(S.book) : [];
     S.entries = Array.isArray(entries) ? entries : [];
+    log.debug('条目已加载', { book: S.book || '（未选择）', count: S.entries.length });
     keep ? [...S.checked].forEach(u => S.entries.some(e => String(e.uid) === String(u)) || S.checked.delete(u)) : S.checked.clear();
     if (S.book && CFG.lastBook !== S.book) { CFG.lastBook = S.book; saveCfg(); }
     if (!cur()) S.sel = S.entries[0]?.uid ?? null;
@@ -317,7 +357,7 @@ export function initializeEditor(runtime) {
       while (S.undo.length > 20 || (S.undo.length > 3 && S.undo.reduce((s, x) => s + x.j.length, 0) > 6e6)) S.undo.shift();
       await fn(); await loadEntries(true);
       if (msg) toast.success(msg);
-    } catch (err) { S.undo.pop(); console.error(err); toast.error('操作失败：' + (err.message || err)); }
+    } catch (err) { S.undo.pop(); log.error('世界书写入失败（已回滚撤销快照）', err); toast.error('操作失败：' + (err.message || err)); }
   }
   async function undo() {
     const s = S.undo.pop();
@@ -339,7 +379,7 @@ export function initializeEditor(runtime) {
         if (toCreate.length) await apiCreateEntries(s.book, toCreate);
       }
       S.book = s.book; await loadEntries(); toast.success('已撤销');
-    } catch (err) { console.error(err); toast.error('撤销失败：' + (err.message || err)); }
+    } catch (err) { log.error('撤销失败', err); toast.error('撤销失败：' + (err.message || err)); }
   }
   async function batch(c, msg) {
     const t = picked();
@@ -432,6 +472,7 @@ ${GUIDE}
     try { return parseAIJSON(await ask(system, user, { format: 'json' })); }
     catch (err) {
       if (!/有效 JSON/.test(err.message)) throw err;
+      logAI.warn('AI 返回非法 JSON，按契约重试一次', { message: err.message });
       return parseAIJSON(await ask(system, user, { format: 'json', retry: true }));
     }
   }
@@ -453,7 +494,23 @@ ${GUIDE}
       if (!CFG.apiurl || !CFG.model) throw new Error('请先在「设置」里填写接口地址和模型');
       cfg.custom_api = { apiurl: CFG.apiurl, key: CFG.key, model: CFG.model, max_tokens: CFG.maxTokens, temperature: CFG.temp };
     }
-    const raw = await th.generateRaw(cfg);
+    logAI.debug('AI 请求', {
+      mode: CFG.mode,
+      model: CFG.mode === 'custom' ? CFG.model : '酒馆当前 API',
+      format,
+      retry,
+      messages: messages.length,
+      chars: messages.reduce((sum, item) => sum + String(item.content || '').length, 0),
+      prefill: !!prefill,
+    });
+    let raw;
+    try {
+      raw = await th.generateRaw(cfg);
+    } catch (err) {
+      logAI.error('AI 请求失败', { model: CFG.mode === 'custom' ? CFG.model : '酒馆当前 API', format, retry, error: err });
+      throw err;
+    }
+    logAI.debug('AI 响应', { chars: String(raw ?? '').length, format, retry });
     if (!prefill) return raw;
     // 有些接口会忽略 prefill 并完整重述，此时不能重复拼接
     const text = String(raw ?? '');
@@ -470,13 +527,13 @@ ${GUIDE}
     return out;
   }
   async function runAI() {
-    const a = S.ai, f = Object.keys(a.f).filter(k => a.f[k]), mkNew = a.scope === 'new';
-    if (!a.instr.trim()) return toast.warning('请先写下修改指令');
+    const a = S.ai, f = Object.keys(a.f).filter(k => a.f[k]), mkNew = a.scope === 'new';    if (!a.instr.trim()) return toast.warning('请先写下修改指令');
     const targets = a.scope === 'cur' ? (cur() ? [cur()] : []) : a.scope === 'sel' ? picked() : a.scope === 'all' ? S.entries : [];
     if (!mkNew && !targets.length) return toast.warning('没有可修改的条目：请先选中或勾选条目');
     if (!mkNew && !f.length) return toast.warning('请至少勾选一个允许修改的字段');
     if (targets.length > 30 && !confirm(`将分批处理 ${targets.length} 条，会多次调用 AI，继续？`)) return;
     a.busy = true; a.cancel = false; a.results = []; a.status = '准备中…'; a.book = S.book; renderAI();
+    logAI.info('AI 批量开始', { scope: a.scope, targets: targets.length, fields: f });
     const brief = S.entries.slice(0, 150).map(e => `- [${e.uid}] ${A.name(e)} | ${A.keys(e).join(', ')}`).join('\n');
     const ctx = a.ctx && brief ? `\n\n【世界书现有条目（仅供参考，不要输出它们）】\n${brief}` : '';
     try {
@@ -501,7 +558,7 @@ ${GUIDE}
         }
       }
       a.status = a.cancel ? '已取消' : a.results.length ? `完成：${a.results.length} 项建议，请检查后应用` : '完成：AI 没有给出任何修改';
-    } catch (err) { console.error(err); a.status = ''; toast.error('AI 调用失败：' + (err.message || err)); }
+    } catch (err) { logAI.error('AI 调用失败', { scope: a.scope, error: err }); a.status = ''; toast.error('AI 调用失败：' + (err.message || err)); }
     a.busy = false; renderAI();
   }
   async function applyAI() {
@@ -514,6 +571,7 @@ ${GUIDE}
       if (edits.length) await apiSetEntries(S.book, edits);
       if (adds.length) await apiCreateEntries(S.book, adds);
     });
+    logAI.info('AI 建议已应用', { edits: edits.length, adds: adds.length, scope: S.ai.scope });
     S.ai.results = []; S.ai.status = ''; renderAI();
   }
   function diff(a, b) {
@@ -593,11 +651,95 @@ ${GUIDE}
     ['去AI腔', '改写得更自然：去掉套话、排比、空泛抒情和「仿佛/宛如」式比喻堆砌，用具体细节替代，保持信息不变'],
     ['要点化', '改写成要点列表，每行一个要点，格式为「项目：内容」，保持信息完整'],
   ];
+  // ---------- 诊断日志（设置页展示 / 复制 / 下载） ----------
+  const LOG_RENDER_LIMIT = 40;
+  let logRenderTimer = null;
+  let logUnsubscribe = null;
+
+  /** 日志导出附带的环境快照：只有版本 / 数量 / 页面地址，不含密钥与世界书正文。 */
+  function logEnv() {
+    let host = null;
+    try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
+    return {
+      扩展版本: '0.8.0',
+      组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
+      酒馆版本: host && host.version ? host.version : '未知',
+      当前世界书: S.book || '（未选择）',
+      条目数: S.entries.length,
+      页面: W.location ? W.location.href : '未知',
+      浏览器: W.navigator ? W.navigator.userAgent : '未知',
+    };
+  }
+
+  async function copyText(text) {
+    try {
+      if (W.navigator && W.navigator.clipboard && typeof W.navigator.clipboard.writeText === 'function') {
+        await W.navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (err) {
+      log.warn('剪贴板写入被拒绝，回退 execCommand', err);
+    }
+    try {
+      const area = D.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      // 用 absolute 移出视口（业务样式禁止 position:fixed），复制后立即移除
+      area.style.position = 'absolute';
+      area.style.left = '-9999px';
+      D.body.appendChild(area);
+      area.select();
+      const ok = D.execCommand('copy');
+      area.remove();
+      return ok;
+    } catch (err) {
+      log.error('复制日志失败', err);
+      return false;
+    }
+  }
+
+  function downloadLogs(text) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = W.URL.createObjectURL(blob);
+    const a = D.createElement('a');
+    a.href = url;
+    a.download = `st-worldbook-editor-log-${stamp}.txt`;
+    a.click();
+    setTimeout(() => { try { W.URL.revokeObjectURL(url); } catch { /* 忽略 */ } }, 1000);
+  }
+
+  function renderLogs() {
+    const list = $('#wbe-loglist', root)[0];
+    if (!list) return;
+    const counts = log.counts();
+    $('#wbe-logsum', root).text(counts.total ? `共 ${counts.total} 条（错误 ${counts.error} / 警告 ${counts.warn}）` : '暂无日志');
+    const entries = log.getEntries({ limit: LOG_RENDER_LIMIT });
+    if (!entries.length) {
+      list.innerHTML = '<div class="nvui-hint">暂无日志。出现异常时会自动记录在这里。</div>';
+      return;
+    }
+    list.innerHTML = entries.map(e => {
+      const detail = e.detail ? JSON.stringify(e.detail) : '';
+      return `<div class="wbe-logrow is-${e.level}"><span class="wbe-logtime">${esc(e.time.slice(11))}</span><span class="wbe-loglv">${e.level.toUpperCase()}</span><span class="wbe-logscope">${esc(e.scope)}</span><span class="wbe-logmsg">${esc(e.message)}${detail ? `<span class="wbe-logdetail">${esc(detail.slice(0, 300))}</span>` : ''}</span></div>`;
+    }).join('');
+  }
+
+  /** 日志写入可能很频繁：只在设置页可见时按 250ms 合并重绘，避免每写一条就重建 DOM。 */
+  function scheduleRenderLogs() {
+    if (logRenderTimer) return;
+    logRenderTimer = setTimeout(() => {
+      logRenderTimer = null;
+      if (!root || S.tab !== 'set') return;
+      renderLogs();
+    }, 250);
+  }
+
   function setHTML() {
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.7.0</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.8.0</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -614,6 +756,19 @@ ${GUIDE}
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${String(c.style || '').trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style || '')}</textarea></label>
+        </div></div>
+      </div>
+      <div class="nvui-acc" id="wbe-acc-diag">
+        <button type="button" class="nvui-acc-head" aria-expanded="false"><span class="nvui-acc-title">${ico('fa-bug')}诊断日志与排障</span><span class="nvui-acc-summary" id="wbe-logsum"></span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <div class="wbe-bar">
+            <button type="button" class="nvui-btn is-sm is-ghost" data-a="logcopy">复制全部日志</button>
+            <button type="button" class="nvui-btn is-sm is-ghost" data-a="logsave">下载日志文件</button>
+            <button type="button" class="nvui-btn is-sm is-ghost" data-a="logclear">清空日志</button>
+            <button type="button" class="nvui-btn is-sm${c.debug ? ' is-secondary' : ''}" data-a="logdebug" aria-pressed="${c.debug ? 'true' : 'false'}">${c.debug ? '详细日志：开' : '详细日志：关'}</button>
+          </div>
+          <p class="nvui-hint">日志只保存在内存（最多 300 条），不会上传或写入设置；API Key / Authorization 等敏感字段会自动脱敏为 ***。遇到报错时点「复制全部日志」，把内容贴给开发者即可。</p>
+          <div id="wbe-loglist" class="wbe-loglist" role="log" aria-live="polite"></div>
         </div></div>
       </div>
       <div class="wbe-bar wbe-mt-2">
@@ -636,6 +791,7 @@ ${GUIDE}
       if (typeof a.setOpen === 'function') a.setOpen(prevOpen[a.id]);
       else a.classList.toggle('is-open', prevOpen[a.id]);
     });
+    renderLogs();
   }
   function cfgSync(el) {
     const n = el.name;
@@ -656,7 +812,7 @@ ${GUIDE}
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <div class="wbe-grid2">${field('查找', `<input class="nvui-input" name="t_find" value="${esc(t.find)}" placeholder="例如：旧角色名">`)}${field('替换为', `<input class="nvui-input" name="t_rep" value="${esc(t.rep)}">`)}</div>
           <div class="wbe-bar"><span class="nvui-hint">范围</span>${tgl('content', '内容', t.f.content)}${tgl('keys', '关键词', t.f.keys)}${tgl('name', '标题', t.f.name)}${tgl('re', '正则', t.re)}</div>
-          <div class="wbe-bar"><button type="button" class="nvui-btn is-ghost" data-a="tfind">预览命中</button><button type="button" class="nvui-btn is-primary" data-a="treplace">全部替换</button><span id="wbe-tmsg" class="nvui-hint"></span></div>
+          <div class="wbe-bar wbe-mt-2"><button type="button" class="nvui-btn is-ghost" data-a="tfind">预览命中</button><button type="button" class="nvui-btn is-primary" data-a="treplace">全部替换</button><span id="wbe-tmsg" class="nvui-hint"></span></div>
         </div></div>
       </div>
       <div class="nvui-acc is-open" id="wbe-acc-probe">
@@ -863,6 +1019,7 @@ ${GUIDE}
       refreshAIMeta();
     }
     if (key === 'tool') refreshTool();
+    if (key === 'set') renderLogs();
   }
   function renderTop() {
     const bookOpts = S.books.map(b => `<option value="${esc(b)}" ${b === S.book ? 'selected' : ''}>${esc(b)}</option>`).join('') || '<option value="">（还没有世界书）</option>';
@@ -1398,7 +1555,7 @@ ${GUIDE}
     try {
       return panel.adoptAccordions(host);
     } catch (err) {
-      console.warn('[ST-Worldbook-Editor] 接管折叠条失败', err);
+      log.warn('接管折叠条失败', err);
       return 0;
     }
   }
@@ -1493,8 +1650,38 @@ ${GUIDE}
         renderSet(); refreshPresets(); refreshAIMeta(); render();
         const jbHost = $('#wbe-jb', root)[0];
         if (jbHost) { jbHost.innerHTML = jbHTML(); adoptAccordions(jbHost); refreshJbSum(); syncJbPresetUi(); }
+        logSet.info('已清理编辑器配置与 API Key');
         toast.success('已清理编辑器配置与 API Key');
-      } catch (err) { toast.error('清理失败：' + (err.message || err)); }
+      } catch (err) { logSet.error('清理编辑器配置失败', err); toast.error('清理失败：' + (err.message || err)); }
+    },
+    async logcopy() {
+      const text = log.exportText({ env: logEnv() });
+      const ok = await copyText(text);
+      if (ok) toast.success('日志已复制，可直接粘贴给开发者');
+      else toast.warning('复制失败，请改用「下载日志文件」');
+    },
+    logsave() {
+      try {
+        downloadLogs(log.exportText({ env: logEnv() }));
+        toast.success('日志文件已开始下载');
+      } catch (err) {
+        log.error('导出日志文件失败', err);
+        toast.error('下载日志失败：' + (err.message || err));
+      }
+    },
+    logclear() {
+      if (!confirm('清空当前内存中的全部诊断日志？')) return;
+      log.clear();
+      renderLogs();
+      toast.info('诊断日志已清空');
+    },
+    logdebug() {
+      CFG.debug = !CFG.debug;
+      saveCfg();
+      log.setLevel(CFG.debug ? 'debug' : 'info');
+      renderSet();
+      log.info('详细日志开关切换', { debug: !!CFG.debug });
+      toast.info(CFG.debug ? '已开启详细日志（debug）' : '已恢复普通日志（info）');
     },
     more() { S.limit += 300; renderList(); },
     goto(el) { if (!guard()) return; goEdit(+el.data('u')); renderList(); },
@@ -1508,12 +1695,12 @@ ${GUIDE}
         const j = await r.json(); S.models = (j.data || j.models || []).map(m => m.id || m.name || m).filter(Boolean).sort();
         $('#wbe-models', root).html(S.models.map(m => `<option value="${esc(m)}">`).join(''));
         toast.success(`拉取到 ${S.models.length} 个模型`);
-      } catch { toast.error('拉取失败（可能被跨域限制），请手动输入模型名'); }
+      } catch (err) { logSet.warn('拉取模型列表失败', { base, error: err }); toast.error('拉取失败（可能被跨域限制），请手动输入模型名'); }
     },
     async settest() {
       const m = $('#wbe-setmsg', root).text('测试中…');
-      try { const t0 = Date.now(), r = await ask('你是测试助手。', '只回复：OK'); m.text(`成功（${Date.now() - t0}ms）：${String(r).slice(0, 40)}`); }
-      catch (err) { m.text('失败：' + (err.message || err)); }
+      try { const t0 = Date.now(), r = await ask('你是测试助手。', '只回复：OK'); m.text(`成功（${Date.now() - t0}ms）：${String(r).slice(0, 40)}`); logAI.info('AI 连接测试成功', { ms: Date.now() - t0 }); }
+      catch (err) { logAI.error('AI 连接测试失败', err); m.text('失败：' + (err.message || err)); }
     },
     tfind() { const h = findHits(); $('#wbe-tmsg', root).text(h.length ? `命中 ${h.length} 个条目：` + h.slice(0, 6).map(x => A.name(x.e)).join('、') + (h.length > 6 ? '…' : '') : '没有命中'); $('#wbe-tsum', root).text(h.length ? `命中 ${h.length} 条` : ''); },
     async treplace() {
@@ -1715,12 +1902,14 @@ ${GUIDE}
       const a = D.createElement('a');
       a.href = W.URL.createObjectURL(new Blob([JSON.stringify(S.entries, null, 2)], { type: 'application/json' }));
       a.download = `${safeName}.entries.json`; a.click();
+      logIO.info('导出条目（JSON）', { book: S.book || '（未选择）', count: S.entries.length });
     },
     exportcsv() {
       const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
       const a = D.createElement('a');
       a.href = W.URL.createObjectURL(new Blob([CSV.stringify(S.entries)], { type: 'text/csv;charset=utf-8;' }));
       a.download = `${safeName}.csv`; a.click();
+      logIO.info('导出条目（CSV）', { book: S.book || '（未选择）', count: S.entries.length });
     },
     import() {
       const f = $('<input type="file" accept=".json,.csv">', D);
@@ -1740,8 +1929,9 @@ ${GUIDE}
             arr = arr.filter(r => r && typeof r === 'object').map(r => (r && (r.strategy || r.key !== undefined) ? r : mk(r)));
           }
           if (!arr.length) throw new Error('未读取到任何有效条目');
+          logIO.info('导入条目', { book: S.book || '（未选择）', count: arr.length, file: file.name });
           await act(`已导入 ${arr.length} 条`, () => apiCreateEntries(S.book, arr.map(({ uid, ...r }) => r)));
-        } catch (err) { toast.error('导入失败：' + err.message); }
+        } catch (err) { logIO.error('导入条目失败', err); toast.error('导入失败：' + err.message); }
       }).trigger('click');
     },
     async new() {
@@ -1765,6 +1955,7 @@ ${GUIDE}
       isSaving = true;
       try {
         await act('已保存', () => apiSetEntries(S.book, [patch(e, c)]));
+        log.debug('条目已保存', { uid: e.uid });
       } finally {
         isSaving = false;
       }
@@ -1815,11 +2006,13 @@ ${GUIDE}
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.7.0',
+      version: 'v0.8.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
-      persist: { size: true, tab: true, accordion: true, storage: runtime.layoutStorage },
+      // 面板尺寸不在持久化范围：桌面高度由 CSS token（--nvui-panel-max-h）统一控制，
+      // 避免旧分辨率存档的 px 高度把面板压矮；Tab 与折叠条状态仍然记忆。
+      persist: { size: false, tab: true, accordion: true, storage: runtime.layoutStorage },
       themeToggle: true,
       onThemeChange(theme) { panel.dialog.classList.toggle('nvui-theme-light', theme === 'light'); },
       focusFallback: '#extensionsMenuButton',
@@ -1832,6 +2025,7 @@ ${GUIDE}
     root = $(panel.panel);
     closeBtnEl = panel.panel.querySelector('.nvui-panel-actions').lastElementChild;
     built = true;
+    log.info('面板 DOM 构建完成', { tabs: TABS.length });
 
     // —— 四个分区一次性挂载；之后 tab 只切显示，不再重建 DOM ——
     $('#wbe-pane-entries', panel.body).html(`<div class="wbe-md" id="wbe-md">
@@ -1883,9 +2077,15 @@ ${GUIDE}
     $('#wbe-pane-set', panel.body).html(`<div id="wbe-set" class="wbe-fset wbe-page">${setHTML()}</div>`);
     // 把 innerHTML 注入的折叠条交给 Kit 接管（持久化），点击仍由本扩展委托监听处理
     adoptAccordions();
+    // 设置页的日志列表实时刷新（只在设置 tab 可见时合并重绘）
+    if (!logUnsubscribe) {
+      logUnsubscribe = log.subscribe(() => { if (S.tab === 'set') scheduleRenderLogs(); });
+    }
     // 破限区的摘要（几 条 / 未设置）由数据算出来，渲染时补一次
     refreshJbSum();
     syncJbPresetUi();
+    // 诊断日志先渲染一次（空态也有占位说明，避免折叠条展开后是一片空白）
+    renderLogs();
 
     // —— 顶部 tabs / 手机底部导航共享同一份状态；Kit 负责切换显示，这里只做未保存守卫与状态镜像 ——
     const navKeyOf = ev => {
@@ -1905,6 +2105,8 @@ ${GUIDE}
       setDirty(false);
       prepTab(key);
       S.tab = key;
+      // 设置页的诊断日志在进入标签时刷新一次（日志只在内存里，重进面板也能看到本次会话记录）
+      if (key === 'set') renderLogs();
     };
     panel.tabs && panel.tabs.addEventListener('click', onNavGuard, true);
     panel.bottomNav && panel.bottomNav.addEventListener('click', onNavGuard, true);
@@ -2028,9 +2230,10 @@ ${GUIDE}
 
   async function open() {
     try { await build(); } catch (err) {
-      console.error(err);
+      log.error('界面构建失败', err);
       return toast.error('界面加载失败：' + (err.message || err));
     }
+    log.info('面板已打开', { book: S.book || '（未选择）', entries: S.entries.length });
     $('#wbe-md', root).removeClass('show-edit');
     panel.open();
     panel.syncIndicator();
@@ -2041,7 +2244,7 @@ ${GUIDE}
     try {
       await loadBooks();
     } catch (err) {
-      console.error('[世界书编辑器读取失败]', err);
+      log.error('读取世界书失败', err);
       toast.error('读取世界书失败：' + (err.message || err));
     } finally {
       isOpenLoading = false;
@@ -2059,6 +2262,8 @@ ${GUIDE}
     if (qTimer) { clearTimeout(qTimer); qTimer = null; }
     if (tokTimer) { clearTimeout(tokTimer); tokTimer = null; }
     if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
+    if (logRenderTimer) { clearTimeout(logRenderTimer); logRenderTimer = null; }
+    if (logUnsubscribe) { logUnsubscribe(); logUnsubscribe = null; }
     if (dragCleanup) { try { dragCleanup(); } catch { /* 忽略 */ } dragCleanup = null; }
     if (root) { try { root.off(); } catch { /* 忽略 */ } }
   }

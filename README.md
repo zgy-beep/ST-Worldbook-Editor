@@ -1,12 +1,21 @@
 # SillyTavern 世界书编辑器 (ST-Worldbook-Editor)
 
-基于 **SillyTavern NVUI Kit v2.7.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
+基于 **SillyTavern NVUI Kit v2.8.0** 的现代世界书（Lorebook / Worldbook）编辑器，以 SillyTavern 标准前端扩展的形式运行。
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
-当前版本：`0.7.0`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
+当前版本：`0.8.0`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
 
-## 0.7.0 更新摘要
+## 0.8.0 更新摘要
+
+- **诊断日志与排障（新）**：新增零依赖日志系统（`src/logger.js`），统一记录启动 / 宿主读写 / AI 请求 / 导入导出 / 兜底异常与页面级未捕获异常；
+  设置页「诊断日志与排障」可一键复制或下载（含环境快照），`window.__wbeLog` 供 DevTools 排障。
+  日志只存内存（300 条）、不写设置、不上传，API Key / Authorization / `sk-…` / `Bearer …` 自动脱敏。
+- **桌面面板增高**：关闭面板尺寸持久化（避免旧分辨率的 px 高度压矮面板），桌面高度从 Kit 默认 `88vh` 提到 `94vh`；手机端保持 92dvh 抽屉。
+- **NVUI Kit 升级到 v2.8.0**：内置上游 v2.8.0 资产（含 v2.7.1 / v2.7.2 的玻璃透明感与浏览器回归稳定性修复）；启动接入 `NVUI.selfCheck` 做版本 / CSS 自检。
+- **修复**：工具页「查找替换」两行按钮垂直间距 `0px`（补 `wbe-mt-2`）；`toastr` 缺失时操作反馈回退不再抛错。
+
+### 0.7.0 更新摘要（历史）
 
 - **保存为自定义预设**：把当前破限前置 / 后置消息完整另存为命名模板，下拉列表按「内置预设 / 自定义预设」分组；套用与保存都使用独立副本，之后继续编辑不会改到内置常量或已保存模板。
 - **同名与删除**：同名自定义预设先显示内联「更新现有 / 取消」，取消不改任何数据；删除自定义预设需内联确认，只删除模板，不影响当前编排。
@@ -18,7 +27,7 @@
 
 ## 功能特性
 
-- **NVUI Kit v2.7.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位。
+- **NVUI Kit v2.8.0 面板规范**：使用本地 `ui-kit/` 提供的 tokens、components 与 `NVUI.createPanel`，支持顶部标签页、移动端底部抽屉、焦点归还与宿主模态让位；启动时用 Kit 的 `selfCheck()` 做版本 / CSS 自检（只写诊断日志，不打扰用户）。
 - **世界书条目全生命周期管理**：新建、删除、编辑、实时预览、字数与 Token 估算；支持常驻、选择性触发、向量化等条目机制。
 - **批量操作**：多选、批量启用/禁用、批量分组、调整顺序、深度与触发概率。
 - **双向数据兼容**：兼容 SillyTavern 原生条目的 `disable`、`constant`、`selective`、`vectorized`、数值型 `position`，并在需要时映射到新的 `strategy` / `position` 结构。
@@ -26,6 +35,8 @@
 - **世界书体检**：孤岛设定、关键词重叠、触发仿真、潜在冲突扫描。
 - **AI 辅助**：对选中条目或整本世界书执行扩写、重写、润色、拆分与冲突检查；结果先进入 Diff 预览，不会自动写入。
 - **安全加固**：动态内容转义、危险正则拦截、AI 结果与来源世界书绑定、路径穿越过滤、保存互斥与撤销。
+- **诊断日志与排障**：启动、宿主读写、AI 请求、导入导出与兜底异常统一记录到内存日志；「设置 → 诊断日志与排障」可一键复制 / 下载，
+  API Key 等敏感字段自动脱敏，数据不上传（详见下文「诊断日志与排障」）。
 - **本地化运行时**：Kit、样式、提示词拼装与解析模块均为扩展本地文件，无需额外网络请求。
 
 ---
@@ -129,6 +140,25 @@ st_worldbook_editor
 
 ---
 
+## 诊断日志与排障
+
+面板「设置 → 诊断日志与排障」是内置的排障入口：
+
+- **自动记录**：扩展启动 / 清理、宿主设置读取与迁移、世界书读写、AI 请求（只记模型 / 条数 / 长度等元信息）、导入导出，
+  以及所有兜底 `catch`；页面级未捕获异常（`error` / `unhandledrejection`）也会自动记录；
+- **复制 / 下载**：「复制全部日志」会把日志连同环境快照（扩展版本、NVUI Kit 版本、酒馆版本、当前世界书、条目数、页面 URL、UA）
+  一起复制到剪贴板；也可「下载日志文件」保存为 `.txt`。遇到报错时把这段内容贴给维护者即可定位；
+- **详细日志**：默认只记 `info / warn / error`；点「详细日志：开」后追加 `debug` 级（AI 请求参数元信息、加载条数、保存的 uid 等），
+  开关保存在扩展设置里；
+- **隐私与体积**：日志只存在**内存环形缓冲（最多 300 条）**，不写 `extensionSettings` / `localStorage`、不上传；
+  `key` / `token` / `authorization` / `secret` / `password` 等字段与 `sk-…` / `Bearer …` 文本会先脱敏成 `***`；
+  世界书正文、聊天文本、提示词原文不会写入日志；
+- **控制台入口**：DevTools 里可用 `__wbeLog`：`__wbeLog.exportText()` 取日志文本、`__wbeLog.getEntries()` 看结构化条目、
+  `__wbeLog.setLevel('debug')` 临时开详细日志；扩展 disable 时会收回该全局。
+
+日志系统是零依赖叶子模块 `src/logger.js`（有 Node 单测），设计说明见
+[诊断日志设计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/diagnostics-logging.md)。
+
 ## 关于破限提示词
 
 **独立的「破限」标签页**提供两个**可编排的消息列表**，对所有 AI 操作生效：
@@ -230,14 +260,12 @@ jailbreak（单条） → jbHead / jbTail（首尾两段） → jbPre / jbPost�
 
 ### 已知限制
 
-- **工具页按钮行间距**：工具页两行按钮当前上下间距为 `0px`，属于本插件业务布局的已知问题，待修复；不影响功能。
 - **Kit 上游问题**：下拉 `optgroup` 配色、隐藏控件的焦点处理、Esc 关闭底层面板曾反馈上游
   [#12](https://github.com/zgy-beep/ui-kit/issues/12) /
   [#13](https://github.com/zgy-beep/ui-kit/issues/13) /
-  [#14](https://github.com/zgy-beep/ui-kit/issues/14)，上游在 Kit `2.7.0` 中修复，已随本扩展内置；
+  [#14](https://github.com/zgy-beep/ui-kit/issues/14)，已在 Kit `2.7.0` 修复；当前内置的
+  `2.8.0` 还顺带收入 `2.7.1`（浏览器回归稳定性 #15）与 `2.7.2`（玻璃透明感修复）。
   原生下拉在不同 OS / 浏览器的绘制仍可能不同。
-- **Kit 浏览器测试**：一次并行运行中半选复选框的过渡样式断言失败，串行复跑通过；
-  已向上游提交[测试稳定性 issue #15](https://github.com/zgy-beep/ui-kit/issues/15)。
 - **后端会按接口改写 role**：相邻同角色消息可能被合并；末尾 `system` 在 Gemini 类接口上
   会转成 `user`。因此不要把关键约束只押在「末尾是一条 system」上。
 - 破限效果取决于模型本身的安全训练强度，本扩展只提供表达能力与结构透明，不保证结果。
@@ -297,10 +325,11 @@ ST-Worldbook-Editor/
 │  ├─ worldbook-api.js       # 世界书读写兼容层（酒馆助手新旧接口）
 │  ├─ ai-prompts.js          # AI 消息拼装与 JSON 解析
 │  ├─ jb-presets.js          # 破限预设/自定义保存校验纯函数（零运行时）
+│  ├─ logger.js              # 诊断日志（零依赖叶子模块：内存环形缓冲 + 脱敏）
 │  └─ styles/
 │     ├─ style.css           # 业务样式：导入 Kit 令牌与组件（零 !important）
 │     └─ host-isolation.css  # 宿主样式隔离层（唯一允许 !important 的文件）
-├─ ui-kit/                   # NVUI Kit v2.7.0 本地运行时与样式资产（自包含独立项目）
+├─ ui-kit/                   # NVUI Kit v2.8.0 本地运行时与样式资产（自包含独立项目）
 └─ test/                     # 项目测试与浏览器端到端冒烟
 ```
 
@@ -315,7 +344,7 @@ ST-Worldbook-Editor/
 > 由 NVUI Kit 自己内置（`dialog.nvui-tl` + `.nvui-panel` 双载体，[issue #9](https://github.com/zgy-beep/ui-kit/issues/9) 已闭环），
 > 本扩展不再重复实现。
 
-Kit v2.7.0 另提供 opt-in `.nvui-form-scope`，供不在上述默认载体内的自定义容器使用；
+Kit（v2.7.0 起）另提供 opt-in `.nvui-form-scope`，供不在上述默认载体内的自定义容器使用；
 本扩展的标准面板已在默认载体内，无需额外加该类。
 
 现在该文件只负责 Kit 按设计覆盖不到的**业务自有控件** `.wbe-chipin`（关键词输入框）：
@@ -343,7 +372,7 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
 
 ### 批量选择复选框
 
-直接复用 Kit v2.7.0 的 `.nvui-checkbox`（[issue #10](https://github.com/zgy-beep/ui-kit/issues/10) 已闭环）：
+直接复用 Kit 的 `.nvui-checkbox`（[issue #10](https://github.com/zgy-beep/ui-kit/issues/10) 已闭环）：
 
 ```html
 <input type="checkbox" class="nvui-checkbox wbe-chk">
@@ -362,13 +391,19 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
   getSettings(),   // 实时读取 extensionSettings，首次使用时初始化/迁移
   saveSettings(),  // 调用宿主 saveSettingsDebounced
   getHelper(),     // 实时读取 window.TavernHelper，未检测到返回 null；不缓存、不硬编码安装目录
+  getHostInfo(),   // 宿主版本快照；只读，供诊断日志环境信息用
   layoutStorage,   // { get(key), set(key, value), remove(key) }
-  NVUI,            // 本地 NVUI Kit 2.7.0 实例
+  NVUI,            // 本地 NVUI Kit 2.8.0 实例
   resetSettings(), // 只清本扩展命名空间与旧 wbe_settings_v1
 }
 ```
 
 `layoutStorage` 已按 NVUI Kit 源码核对：Kit 内部持久化使用 `get` / `set`，清理时使用 `delete`（缺失时回退 `set(key, null)`）。本实现对外暴露契约要求的 `remove`，同时提供不可枚举的 `delete` 别名，且 `set(key, null)` 也会执行删除。
+
+`src/index.js` 在拿到本地 Kit 后会调用 `NVUI.selfCheck({ expect: '2.8.0' })`：
+版本漂移（JS 与 `tokens.css` 不同版本）、样式未加载会以 `console.warn` 输出；
+`glass-auto-fallback` 是宿主开启 Fast UI / 关闭模糊时的正常降级，已从告警中忽略。
+面板控制器还可用 `panel.getGlassState()` 查看当前玻璃生效态（`auto` / `force` / `solid`）。
 
 `src/Worldbook-Editor.js` 由 `src/index.js` 以 `initializeEditor(runtime)` 方式导入并调用，返回 `{ open, destroy }`；它不再自行执行 IIFE，也不自行挂载扩展菜单。
 
@@ -379,7 +414,10 @@ v2.6.0 起交给 Kit 的 `panel.adoptAccordions()`（[issue #11](https://github.
 - 最低 SillyTavern 客户端版本：`1.17.0`（`manifest.json` 的 `minimum_client_version`）。`activate` / `disable` 等 manifest 生命周期钩子从 1.17.0 开始提供，与本文使用的生命周期一致。
 - 生命周期使用标准扩展钩子：`activate` → `init`，`disable` → `onDisable`。
 - 启动等待 `APP_READY`；如果扩展在 `APP_READY` 之后才加载，事件源会补发该事件。清理后再次初始化可重新创建菜单与面板。
-- NVUI Kit：`2.7.0`，随扩展本地提供。
+- NVUI Kit：`2.8.0`，随扩展本地提供（覆盖 v2.7.1 / v2.7.2 的修复；新增 `selfCheck` /
+  `checkCompatibility` / `defaults`、`--nvui-kit-version`、`.nvui-actions` 与可选 `glass` 模式）。
+- 桌面面板高度：在 Kit 默认 `--nvui-panel-max-h: 88vh` 的基础上，本扩展作用域内提高到 `94vh`，
+  并关闭面板尺寸持久化，避免旧分辨率保存的 px 高度把面板压矮；手机端仍是 Kit 的 92dvh 底部抽屉。
 - 不新增网络 CDN 依赖。
 - 酒馆助手不是 `manifest.dependencies` 中的硬编码扩展目录依赖：本扩展在运行时检查 `window.TavernHelper`，避免酒馆助手安装目录改名后失效。
 
@@ -409,7 +447,7 @@ npm run test:browser
 
 可选 `ST_PUBLIC_DIR` 指向 SillyTavern 的 `public` 目录。测试在隔离的本地页面中模拟宿主与酒馆助手，不调用真实模型，也不读写现有世界书。
 
-测试覆盖：标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、自定义破限预设的保存 / 更新 / 删除 / 持久化、桌面 / 移动端布局、宿主模态让位、布局持久化与停用 / 重新启用生命周期。
+测试覆盖：标准扩展入口、设置迁移、酒馆助手桥接、AI 提示词与 JSON 解析、自定义破限预设的保存 / 更新 / 删除 / 持久化、桌面 / 移动端布局、宿主模态让位、布局持久化与停用 / 重新启用生命周期、诊断日志（脱敏、全局异常、设置页入口、详细日志开关）。
 
 发布前应在开发机跑完以上三条命令，并以当次真实输出为准；README 不记录某次会话的日志文件或通过数。
 
@@ -420,6 +458,7 @@ npm run test:browser
 - [破限预设验收记录](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/jailbreak-preset-acceptance.md)
 - [破限模块设计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/jailbreak-module-design.md)
 - [Kit 集成审计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/kit-integration-audit.md)
+- [诊断日志设计](https://github.com/zgy-beep/ST-Worldbook-Editor/blob/main/docs/diagnostics-logging.md)
 
 设计文档可能包含尚未实现的规划（例如破限编排预览、预设级撤销与导入导出）；已实现范围以本 README 与源码为准。
 
