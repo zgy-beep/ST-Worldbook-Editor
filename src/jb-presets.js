@@ -292,3 +292,76 @@ export function readCustomPresets(value) {
   }
   return out;
 }
+
+/* ---------------------- G15：配置与预设备份（不含密钥） ---------------------- */
+
+export const CONFIG_SCHEMA_VERSION = 1;
+
+function cloneInstructionPresets(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const label = String(item.l ?? '').trim();
+    const text = String(item.t ?? '').trim();
+    if (!label || !text) continue;
+    out.push({ l: label, t: text });
+  }
+  return out;
+}
+
+/**
+ * 生成可导出的配置备份。**明确排除** API Key / 接口地址 / 模型 / 温度等敏感或设备相关字段，
+ * 只包含可迁移的用户资产：指令预设、破限自定义预设、统一文风。
+ */
+export function buildConfigBundle(cfg = {}) {
+  return {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    kind: 'wbe-config',
+    exportedAt: new Date().toISOString(),
+    style: String(cfg.style || ''),
+    presets: cloneInstructionPresets(cfg.presets),
+    jbCustomPresets: readCustomPresets(cfg.jbCustomPresets).map(preset => ({
+      id: preset.id, name: preset.name,
+      pre: cloneJbMessages(preset.pre), post: cloneJbMessages(preset.post),
+    })),
+  };
+}
+
+/**
+ * 校验导入的配置备份，返回可安全写入的数据或错误。
+ * 只接受本扩展导出的格式（kind + schemaVersion）；坏条目单独跳过并计入 skipped。
+ */
+export function validateConfigBundle(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: '配置文件不是 JSON 对象。' };
+  }
+  if (raw.kind !== 'wbe-config') {
+    return { ok: false, error: '不是世界书编辑器的配置文件（kind 不匹配）。' };
+  }
+  if (raw.schemaVersion !== CONFIG_SCHEMA_VERSION) {
+    return { ok: false, error: `配置文件版本不受支持：${raw.schemaVersion}` };
+  }
+  const presets = cloneInstructionPresets(raw.presets).slice(0, 50);
+  const jbCustomPresets = [];
+  let skipped = 0;
+  const rawJb = Array.isArray(raw.jbCustomPresets) ? raw.jbCustomPresets : [];
+  for (const item of rawJb) {
+    if (!item || typeof item !== 'object') { skipped += 1; continue; }
+    const name = validatePresetName(item.name);
+    if (!name.ok) { skipped += 1; continue; }
+    const draft = validateJbDraft(item.pre, item.post);
+    if (!draft.ok) { skipped += 1; continue; }
+    jbCustomPresets.push(createCustomPreset({ id: item.id, name: name.name, pre: draft.pre, post: draft.post }));
+    if (jbCustomPresets.length >= 50) break;
+  }
+  const style = typeof raw.style === 'string' ? raw.style : '';
+  if (!presets.length && !jbCustomPresets.length && !style.trim()) {
+    return { ok: false, error: '配置文件里没有可导入的指令预设、破限预设或文风。' };
+  }
+  return {
+    ok: true,
+    value: { style, presets, jbCustomPresets },
+    skipped: skipped + Math.max(0, rawJb.length - jbCustomPresets.length - skipped),
+  };
+}
