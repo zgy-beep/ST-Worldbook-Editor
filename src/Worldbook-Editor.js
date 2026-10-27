@@ -1,4 +1,4 @@
-// 世界书编辑器 v0.8.0 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.9.0 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
@@ -691,7 +691,7 @@ ${GUIDE}
     let host = null;
     try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
     return {
-      扩展版本: '0.8.0',
+      扩展版本: '0.9.0',
       组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
       酒馆版本: host && host.version ? host.version : '未知',
       当前世界书: S.book || '（未选择）',
@@ -769,7 +769,7 @@ ${GUIDE}
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.8.0</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.9.0</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -2101,7 +2101,7 @@ ${GUIDE}
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.8.0',
+      version: 'v0.9.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）

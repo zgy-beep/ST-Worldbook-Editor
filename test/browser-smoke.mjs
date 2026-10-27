@@ -380,7 +380,7 @@ try {
     });
     log.error('日志冒烟-error', new Error('smoke-boom'));
     window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
-    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.8.0' } }) };
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.9.0' } }) };
   });
   assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
   assert.match(logProbe.text, /日志冒烟-未捕获/);
