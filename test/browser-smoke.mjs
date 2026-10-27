@@ -165,6 +165,7 @@ window.TavernHelper = {
   updateWorldbookWith: async(book, fn) => { entries=await fn(structuredClone(entries));return entries; },
   createWorldbookEntries: async(book, list) => {entries.push(...list.map((e,i)=>({...e,uid:10+i})));return entries;},
   deleteWorldbookEntries: async(book, fn) => {entries=entries.filter(e=>!fn(e));return {worldbook:entries};},
+  getCharWorldbookNames: () => ['验收世界书'], getChatWorldbookName: () => '验收世界书', getGlobalWorldbookNames: () => [],
   generateRaw: async cfg => { calls.push(structuredClone(cfg));
     if (failCall && calls.length === failCall) throw new Error('mock chunk failure');
     if (invalidOnce) {invalidOnce=false;return '这里是格式错误的说明文字';}
@@ -299,8 +300,7 @@ try {
   await page.locator('[name=instr]').fill('润色港口描述');
   await page.locator('[data-a=aigo]').click();
   await page.locator('[data-a=aiapply]').waitFor();
-  const prompts = await page.evaluate(()=>calls[0].ordered_prompts);
-  assert.ok(prompts[0].content.includes('理解并接受'), '前置消息必须是第一条');
+  const prompts = await page.evaluate(()=>calls[0].ordered_prompts);  assert.ok(prompts[0].content.includes('理解并接受'), '前置消息必须是第一条');
   assert.equal(prompts[0].role, 'user', '「模拟已接受」必须以 user 角色下发，不能是 assistant');
   assert.ok(prompts[0].content.includes('（上一轮回复）'), '「模拟已接受」应带上一轮回复前缀');
   assert.ok(!prompts.some(p => p.role === 'assistant' && p.content.includes('理解并接受')),
@@ -386,7 +386,7 @@ try {
     });
     log.error('日志冒烟-error', new Error('smoke-boom'));
     window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
-    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.10.0' } }) };
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.11.0' } }) };
   });
   assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
   assert.match(logProbe.text, /日志冒烟-未捕获/);
@@ -402,9 +402,11 @@ try {
   assert.equal(await page.evaluate(() => settings.st_worldbook_editor.debug), true);
   await page.locator('[data-a=logdebug]').click();
   assert.equal(await page.evaluate(() => window.__wbeLog.getLevel()), 'info');
-  // 清空日志（confirm 由 dialog handler 自动接受）
+  // 清空日志（G13：危险操作改为面板内联确认，不再用原生 confirm）
   await page.locator('[data-a=logclear]').click();
-  assert.equal(await page.evaluate(() => window.__wbeLog.getEntries().length), 0);
+  await page.locator('#wbe-inline-confirm').waitFor();
+  await page.locator('[data-a=confirmok]').click();
+  await page.waitForFunction(() => (window.__wbeLog?.getEntries?.() || []).length === 0);
   assert.match(await page.locator('#wbe-logsum').textContent(), /暂无日志/);
   await page.locator('#wbe-tab-jb').click();
 
@@ -456,6 +458,8 @@ try {
 
   // 套用后编辑当前消息，不得反向污染已保存的自定义预设（独立深拷贝）。
   await page.locator('[data-a=jbapply]').click();
+  await page.locator('#wbe-inline-confirm').waitFor();
+  await page.locator('[data-a=confirmok]').click();
   await page.locator('#wbe-jbpre .wbe-jbtext').first().fill('套用后临时修改');
   const applied = await page.evaluate(() => ({
     storedPre: settings.st_worldbook_editor.jbCustomPresets[0].pre[0].content,
@@ -702,7 +706,7 @@ try {
   await page.evaluate(() => { document.querySelector('.nvui-panel-body').scrollTop = 150; });
   await page.waitForTimeout(200);
   const scrollBefore = await page.evaluate(() => document.querySelector('.nvui-panel-body').scrollTop);
-  await page.locator('.wbe-row').nth(5).click();
+  await page.locator('.wbe-row').nth(2).click();
   await page.waitForTimeout(300);
   const scrollAfter = await page.evaluate(() => document.querySelector('.nvui-panel-body').scrollTop);
   assert.equal(await page.evaluate(() => window.__sivCalls), 0, '选择条目不应调用 scrollIntoView');
@@ -886,6 +890,18 @@ try {
 
   // 全空编排：UI 给出可理解错误，不创建空预设、不清空/裁剪用户配置。
   await page.locator('[data-a=jbclear]').click();
+  await page.locator('#wbe-inline-confirm').waitFor();
+  await page.locator('[data-a=confirmok]').click();
+  await page.waitForFunction(() => settings.st_worldbook_editor.jbPre.length === 0
+    && settings.st_worldbook_editor.jbPost.length === 0);
+  // G10：编排预览（只读）与单步撤销
+  assert.match(await page.locator('#wbe-jbpreview').textContent(), /【任务说明 \+ 文风 \+ 内容】/);
+  await page.locator('[data-a=jbu]').click();
+  await page.waitForFunction(() => settings.st_worldbook_editor.jbPre.length > 0);
+  assert.match(await page.locator('#wbe-jbpreview').textContent(), /前置 1/);
+  await page.locator('[data-a=jbclear]').click();
+  await page.locator('#wbe-inline-confirm').waitFor();
+  await page.locator('[data-a=confirmok]').click();
   await page.waitForFunction(() => settings.st_worldbook_editor.jbPre.length === 0
     && settings.st_worldbook_editor.jbPost.length === 0);
   await page.locator('[data-a=jbsaveopen]').click();
@@ -896,6 +912,52 @@ try {
   assert.equal(await page.evaluate(() => settings.st_worldbook_editor.jbCustomPresets.length), 0,
     '全空编排不得创建自定义预设');
   await page.locator('[data-a=jbpresetcancel]').click();
+
+  // G12：世界书绑定可视化（fixture 提供角色卡 / 聊天绑定 API）
+  const clickTab = async key => {
+    const bottom = page.locator(`.nvui-bottom-nav-item[data-key="${key}"]`);
+    if (await bottom.isVisible().catch(() => false)) await bottom.click();
+    else await page.locator(`#wbe-tab-${key}`).click();
+  };
+  await clickTab('entries');
+  await page.waitForFunction(() => !document.querySelector('#wbe-binding')?.hidden);
+  assert.match(await page.locator('#wbe-binding').textContent(), /角色卡：验收世界书/);
+  assert.match(await page.locator('#wbe-binding').textContent(), /聊天：验收世界书/);
+
+  // G14：高级机制只读展示（递归 / 效果 / 扫描深度 / at_depth role）
+  await page.waitForFunction(() => document.querySelector('#wbe-ebody')?.textContent.includes('高级机制（只读）'));
+  const advancedText = await page.locator('#wbe-ebody').textContent();
+  assert.match(advancedText, /扫描深度/);
+  assert.match(advancedText, /递归：防止传入/);
+  assert.match(advancedText, /在 JSON 视图编辑/);
+
+  // G15：配置备份导出 / 导入（不含 API Key）
+  await clickTab('set');
+  await page.waitForFunction(() => document.querySelector('#wbe-acc-backup') !== null);
+  await page.locator('#wbe-acc-backup .nvui-acc-head').click();
+  await page.waitForFunction(() => document.querySelector('#wbe-acc-backup')?.classList.contains('is-open'));
+  const [configDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('[data-a=cfgdownload]').click(),
+  ]);
+  assert.match(configDownload.suggestedFilename(), /st-worldbook-editor-config\.json/);
+  const [configChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.locator('[data-a=cfgimport]').click(),
+  ]);
+  await configChooser.setFiles({
+    name: 'config.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      kind: 'wbe-config', schemaVersion: 1, style: '导入文风',
+      presets: [{ l: '导入预设', t: '导入文本' }], jbCustomPresets: [],
+    })),
+  });
+  await page.locator('#wbe-inline-confirm').waitFor();
+  await page.locator('[data-a=confirmok]').click();
+  await page.waitForFunction(() => settings.st_worldbook_editor.style === '导入文风');
+  await page.waitForFunction(() => /已导入/.test(document.querySelector('#wbe-cfgmsg')?.textContent || ''));
+  assert.equal(await page.evaluate(() => settings.st_worldbook_editor.key), '', '配置备份不得带入 API Key');
 
   assert.deepEqual(errors,[]);
   console.log('Browser smoke passed: standard entry, migration, helper bridge, AI prompts/parse/apply, tabs, desktop/mobile, host modal, layout, custom presets, lifecycle.');

@@ -1,4 +1,4 @@
-// 世界书编辑器 v0.10.0 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.11.0 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
@@ -7,12 +7,14 @@ import { createWorldbookApi } from './worldbook-api.js';
 import {
   BUILTIN_JB_PRESETS,
   MAX_PRESET_NAME_CODE_POINTS,
+  buildConfigBundle,
   cloneJbMessages,
   createCustomPreset,
   findBuiltinPresetByName,
   findCustomPresetByName,
   readCustomPresets,
   updateCustomPreset,
+  validateConfigBundle,
   validateJbDraft,
   validatePresetName,
 } from './jb-presets.js';
@@ -63,6 +65,28 @@ export function initializeEditor(runtime) {
     info(m) { toast.show(m, 'info', 'fa-solid fa-circle-info'); },
   };
 
+  /**
+   * G13：内联确认，替代危险操作里的 window.confirm。
+   * 嵌在面板内、不阻塞焦点；未渲染锚点时回退原生 confirm。
+   */
+  let inlineConfirmResolve = null;
+  function confirmInline(message, { confirmText = '确认', danger = true } = {}) {
+    const anchor = $('#wbe-inline-confirm', root);
+    if (!anchor.length) return Promise.resolve(confirm(message));
+    if (inlineConfirmResolve) inlineConfirmResolve(false);
+    return new Promise(resolve => {
+      inlineConfirmResolve = resolve;
+      anchor.html(`<div class="nvui-alert ${danger ? 'is-danger' : 'is-warn'}"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i><span>${esc(message)}</span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm ${danger ? 'is-danger' : 'is-secondary'}" data-a="confirmok">${esc(confirmText)}</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="confirmcancel">取消</button></div>`).prop('hidden', false);
+    });
+  }
+  function settleInlineConfirm(value) {
+    const anchor = $('#wbe-inline-confirm', root);
+    if (anchor.length) anchor.prop('hidden', true).html('');
+    const resolve = inlineConfirmResolve;
+    inlineConfirmResolve = null;
+    if (resolve) resolve(value);
+  }
+
   const POS = {
     before_character_definition: '角色定义前', after_character_definition: '角色定义后',
     before_example_messages: '示例前', after_example_messages: '示例后',
@@ -112,6 +136,7 @@ export function initializeEditor(runtime) {
       newGroup: '', newPos: 'after_character_definition',
     },
     jbPresetSel: '',
+    jbUndo: null,
   };
   // 破限预设的内联表单状态，只存在内存里，不写入设置
   const jbPresetUi = { mode: '', name: '', error: '', targetId: '', pending: null };
@@ -154,8 +179,20 @@ export function initializeEditor(runtime) {
     depth: e => (isNew(e) ? e.position?.depth : e.depth) ?? 0,
     order: e => (isNew(e) ? e.position?.order : e.order) ?? 0,
     prob: e => e.probability ?? 100,
+    role: e => e.position?.role ?? e.role ?? 'system',
+    scanDepth: e => e.strategy?.scan_depth ?? e.scanDepth ?? 'same_as_global',
+    recursion: e => (e.recursion && typeof e.recursion === 'object' ? e.recursion : null),
+    effect: e => (e.effect && typeof e.effect === 'object' ? e.effect : null),
     group: e => String(e.group ?? '').trim(),
   };
+  /** G14：高级机制只读视图 —— 写入仍走 JSON 视图，避免新旧双结构映射出错。 */
+  function advancedInfo(e) {
+    const recursion = A.recursion(e) || {}, effect = A.effect(e) || {};
+    const yn = value => (value === true ? '是' : value === false ? '否' : '未设置');
+    return `扫描深度 ${A.scanDepth(e)} · at_depth 角色 ${A.role(e)}；`
+      + `递归：防止传入 ${yn(recursion.prevent_incoming)} / 防止传出 ${yn(recursion.prevent_outgoing)} / 延迟 ${recursion.delay_until ?? '未设置'}；`
+      + `效果：黏性 ${yn(effect.sticky)} / 冷却 ${effect.cooldown ?? '未设置'} / 延迟 ${effect.delay ?? '未设置'}。`;
+  }
   function patch(e, c) {
     const p = { uid: e.uid }, n = isNew(e);
     if ('name' in c) p[n ? 'name' : 'comment'] = c.name;
@@ -777,7 +814,7 @@ ${GUIDE}
     let host = null;
     try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
     return {
-      扩展版本: '0.10.0',
+      扩展版本: '0.11.0',
       组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
       酒馆版本: host && host.version ? host.version : '未知',
       当前世界书: S.book || '（未选择）',
@@ -855,7 +892,7 @@ ${GUIDE}
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.10.0</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.11.0</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -872,6 +909,17 @@ ${GUIDE}
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-pen-fancy')}统一设定与文风</span><span class="nvui-acc-summary" id="wbe-stylesum">${String(c.style || '').trim() ? '已设置' : '未设置'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           <label class="wbe-field"><span class="nvui-hint">附加到每一次 AI 请求</span><textarea class="nvui-input" name="s_style" rows="5" placeholder="例如：世界观为蒸汽朋克；条目一律用第三人称、简洁的说明文；人名统一使用中文译名……">${esc(c.style || '')}</textarea></label>
+        </div></div>
+      </div>
+      <div class="nvui-acc" id="wbe-acc-backup">
+        <button type="button" class="nvui-acc-head" aria-expanded="false"><span class="nvui-acc-title">${ico('fa-box-archive')}配置备份（不含密钥）</span><span class="nvui-acc-summary">导出 / 导入预设与文风</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
+        <div class="nvui-acc-body"><div class="nvui-acc-inner">
+          <div class="wbe-bar">
+            <button type="button" class="nvui-btn is-sm is-ghost" data-a="cfgdownload">导出配置备份</button>
+            <button type="button" class="nvui-btn is-sm is-ghost" data-a="cfgimport">导入配置备份</button>
+            <span class="nvui-hint" id="wbe-cfgmsg"></span>
+          </div>
+          <p class="nvui-hint">只包含指令预设、破限自定义预设与统一文风；不含 API Key / 接口地址 / 模型等设备相关配置。导入先校验、确认后覆盖对应配置，失败不写入。</p>
         </div></div>
       </div>
       <div class="nvui-acc" id="wbe-acc-help">
@@ -1210,7 +1258,23 @@ ${GUIDE}
     $('#wbe-flt', root).val(S.flt); $('#wbe-sort', root).val(S.sort); $('#wbe-tpl', root).val(CFG.tpl || 'blank');
     // G06：没有任何世界书时给显式引导，而不是让用户对空列表猜
     $('#wbe-nobook', root).prop('hidden', S.books.length > 0);
+    renderBinding();
     renderImportPreview();
+  }
+  /** G12：世界书绑定可视化（角色卡 / 聊天 / 全局），宿主无对应助手 API 时静默隐藏。 */
+  function renderBinding() {
+    const box = $('#wbe-binding', root);
+    if (!box.length) return;
+    const helper = getTH();
+    const read = fn => { try { return typeof fn === 'function' ? fn() : null; } catch { return null; } };
+    const charNames = read(() => helper.getCharWorldbookNames?.('current')) || [];
+    const chatName = read(() => helper.getChatWorldbookName?.('current')) || null;
+    const globalNames = read(() => helper.getGlobalWorldbookNames?.()) || [];
+    const parts = [];
+    if (Array.isArray(charNames) && charNames.length) parts.push(`角色卡：${charNames.join('、')}`);
+    if (chatName) parts.push(`聊天：${chatName}`);
+    if (Array.isArray(globalNames) && globalNames.length) parts.push(`全局：${globalNames.join('、')}`);
+    box.text(parts.length ? `绑定 — ${parts.join('；')}` : '').prop('hidden', !parts.length);
   }
   /** G08：导入预览卡片（条数 / 前 10 条 / 重名提示 / 确认后追加写入）。 */
   function renderImportPreview() {
@@ -1320,6 +1384,10 @@ ${GUIDE}
           ${field('概率 %', `<input class="nvui-input" name="prob" type="number" min="0" max="100" value="${A.prob(e)}">`)}
         </div>
         <div id="wbe-recomout"></div>
+      </div>
+      <div class="wbe-field">
+        <div class="wbe-lbl"><span>高级机制（只读）</span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="view" data-v="json">在 JSON 视图编辑</button></div>
+        <div class="nvui-hint">${advancedInfo(e)}</div>
       </div>
       <label class="wbe-field"><span class="wbe-lbl"><span>内容</span><span class="nvui-hint" id="wbe-tok"></span></span><textarea class="nvui-input wbe-big" name="content" spellcheck="false">${esc(e.content)}</textarea></label>
       <div class="wbe-bar"><span class="nvui-hint">选区 AI（不选则处理全文）：</span>${SEL_AI.map(([l], i) => `<button type="button" class="nvui-btn is-sm is-ghost" data-a="selai" data-i="${i}">${l}</button>`).join('')}<button type="button" class="nvui-btn is-sm is-ghost" data-a="selai" data-i="-1">自定义…</button></div><div id="wbe-selout"></div>
@@ -1621,6 +1689,23 @@ ${GUIDE}
       const n = list.filter(m => String(m.content || '').trim()).length;
       $(`#${jbRegion(kind).sum}`, root).text(n ? `${n} 条` : '未设置');
     }
+    renderJbPreview();
+  }
+  /** G10：只读的最终消息顺序预览（前置 → 任务 → 后置 → 契约 → 重试 → assistant 预填充）。 */
+  function renderJbPreview() {
+    const box = $('#wbe-jbpreview', root);
+    if (!box.length) return;
+    const pre = jbList('pre'), post = jbList('post');
+    const cut = text => { const s = String(text || '').replace(/\s+/g, ' ').trim(); return s.length > 36 ? `${s.slice(0, 36)}…` : (s || '（空）'); };
+    const rows = [];
+    pre.forEach((m, i) => rows.push(`前置 ${i + 1} [${m.role || 'system'}] ${cut(m.content)}`));
+    rows.push('【任务说明 + 文风 + 内容】');
+    post.filter(m => m.role !== 'assistant').forEach((m, i) => rows.push(`后置 ${i + 1} [${m.role || 'system'}] ${cut(m.content)}`));
+    rows.push('【输出格式契约】');
+    rows.push('【重试提醒（仅 JSON 重试时）】');
+    const prefill = [...post].reverse().find(m => m.role === 'assistant');
+    if (prefill) rows.push(`【assistant 预填充（整条请求最后一条）】${cut(prefill.content)}`);
+    box.html(rows.map((row, i) => `<div class="nvui-hint">${i + 1}. ${esc(row)}</div>`).join(''));
   }
   function renderJb(kind) {
     const host = $(`#${jbRegion(kind).host}`, root);
@@ -1690,6 +1775,7 @@ ${GUIDE}
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="jbsaveopen">${ico('fa-floppy-disk')}保存为自定义预设</button>
           <button type="button" id="wbe-jbdelcustom" class="nvui-btn is-sm is-ghost" data-a="jbdelopen"${canDelete ? '' : ' disabled'} title="${canDelete ? '删除当前选中的自定义预设' : '内置预设不可删除'}">${ico('fa-trash')}删除自定义预设</button>
           <button type="button" class="nvui-btn is-sm is-ghost" data-a="jbclear">清空</button>
+          <button type="button" class="nvui-btn is-sm is-ghost" data-a="jbu" title="撤销上一次套用 / 清空（单步，仅内存）">撤销上次套用/清空</button>
         </div>
         <p class="nvui-hint" id="wbe-jbhint">套用会替换两个区域的现有内容，之后仍可自由编辑。</p>
         <div id="wbe-jbpreset-panel"></div>
@@ -1701,6 +1787,10 @@ ${GUIDE}
           输出格式要求仍是最后一条<b>指令</b>（被任何指令排到后面都会削弱 JSON / 正文稳定性）；
           而 <code>assistant</code> 是「已生成的回答开头」，按 Chat Completion 的 API 约束必须位于整条请求最末，
           模型会直接从这里续写——它不算指令，所以不冲突。全部留空则不追加任何消息。</p>
+        </div>
+        <div class="wbe-card wbe-card-info">
+          <div class="wbe-ln"><b>编排预览（只读）</b><span class="nvui-hint">按当前前置 / 后置消息计算的最终顺序</span></div>
+          <div id="wbe-jbpreview"></div>
         </div>
       </div>`;
   }
@@ -1830,6 +1920,8 @@ ${GUIDE}
   };
   const actions = {
     close() { if (guard()) { setDirty(false); panel.close(); } },
+    confirmok: () => settleInlineConfirm(true),
+    confirmcancel: () => settleInlineConfirm(false),
     back: () => $('#wbe-md', root).removeClass('show-edit'),
     preved: () => goAdjacent(-1),
     nexted: () => goAdjacent(1),
@@ -1856,8 +1948,8 @@ ${GUIDE}
     atgl(el) { const k = el.data('k'); S.ai.f[k] = !S.ai.f[k]; el.toggleClass('is-secondary', S.ai.f[k]).attr('aria-pressed', String(S.ai.f[k])); },
     ttgl(el) { const k = el.data('k'), v = k === 're' ? (S.tool.re = !S.tool.re) : (S.tool.f[k] = !S.tool.f[k]); el.toggleClass('is-secondary', v).attr('aria-pressed', String(v)); },
     smode(el) { CFG.mode = el.data('v'); saveCfg(); renderSet(); refreshAIMeta(); },
-    clearstorage() {
-      if (!confirm('确定清理世界书编辑器的 API Key、提示词和布局设置吗？')) return;
+    async clearstorage() {
+      if (!(await confirmInline('确定清理世界书编辑器的 API Key、提示词和布局设置吗？'))) return;
       try {
         runtime.resetSettings();
         S.sort = 'idx'; S.flt = 'all'; S.groupFlt = 'all'; S.jbPresetSel = '';
@@ -1868,6 +1960,46 @@ ${GUIDE}
         logSet.info('已清理编辑器配置与 API Key');
         toast.success('已清理编辑器配置与 API Key');
       } catch (err) { logSet.error('清理编辑器配置失败', err); toast.error('清理失败：' + (err.message || err)); }
+    },
+    /** G15：导出配置备份（预设 / 破限预设 / 文风，不含密钥）。 */
+    cfgdownload() {
+      try {
+        const bundle = buildConfigBundle(CFG);
+        const a = D.createElement('a');
+        a.href = W.URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }));
+        a.download = 'st-worldbook-editor-config.json'; a.click();
+        $('#wbe-cfgmsg', root).text(`已导出：${bundle.presets.length} 个指令预设 / ${bundle.jbCustomPresets.length} 个破限预设`);
+        logSet.info('导出配置备份', { presets: bundle.presets.length, presetsJb: bundle.jbCustomPresets.length });
+      } catch (err) { logSet.error('导出配置备份失败', err); toast.error('导出失败：' + (err.message || err)); }
+    },
+    /** G15：导入配置备份；先校验再内联确认，确认后才覆盖配置。 */
+    cfgimport() {
+      const f = $('<input type="file" accept=".json">', D);
+      f.on('change', async () => {
+        try {
+          const file = f[0].files[0]; if (!file) return;
+          const parsed = JSON.parse(await file.text());
+          const result = validateConfigBundle(parsed);
+          if (!result.ok) return toast.error('导入失败：' + result.error);
+          const { style, presets, jbCustomPresets } = result.value;
+          const ok = await confirmInline(`导入 ${presets.length} 个指令预设、${jbCustomPresets.length} 个破限预设${style.trim() ? '与统一文风' : ''}？将覆盖当前对应配置。`);
+          if (!ok) return;
+          CFG.presets = presets;
+          CFG.jbCustomPresets = jbCustomPresets;
+          if (style.trim()) CFG.style = style;
+          saveCfg();
+          renderSet();
+          renderJbPresetPanel();
+          refreshJbSum();
+          refreshPresets();
+          refreshAIMeta();
+          const jbHost = $('#wbe-jb', root)[0];
+          if (jbHost) { jbHost.innerHTML = jbHTML(); adoptAccordions(jbHost); refreshJbSum(); syncJbPresetUi(); }
+          $('#wbe-cfgmsg', root).text(`已导入：${presets.length} 个指令预设 / ${jbCustomPresets.length} 个破限预设${result.skipped ? `（跳过 ${result.skipped} 条坏数据）` : ''}`);
+          toast.success('配置备份已导入');
+          logSet.info('导入配置备份', { presets: presets.length, presetsJb: jbCustomPresets.length, skipped: result.skipped });
+        } catch (err) { logSet.error('导入配置备份失败', err); toast.error('导入失败：' + (err.message || err)); }
+      }).trigger('click');
     },
     async logcopy() {
       const text = log.exportText({ env: logEnv() });
@@ -1884,8 +2016,8 @@ ${GUIDE}
         toast.error('下载日志失败：' + (err.message || err));
       }
     },
-    logclear() {
-      if (!confirm('清空当前内存中的全部诊断日志？')) return;
+    async logclear() {
+      if (!(await confirmInline('清空当前内存中的全部诊断日志？'))) return;
       log.clear();
       renderLogs();
       toast.info('诊断日志已清空');
@@ -2053,14 +2185,16 @@ ${GUIDE}
     },
     undo,
     rmchip(el) { el.closest('.nvui-chip').remove(); setDirty(true); },
-    jbapply() {
+    async jbapply() {
       const preset = selectedJbPreset();
       if (!preset) return;
       const pre = Array.isArray(CFG.jbPre) ? CFG.jbPre : [];
       const post = Array.isArray(CFG.jbPost) ? CFG.jbPost : [];
       const hasContent = pre.some(m => String(m.content || '').trim())
         || post.some(m => String(m.content || '').trim());
-      if (hasContent && !confirm(`套用「${preset.name}」会替换当前前置 / 后置消息，继续？`)) return;
+      if (hasContent && !(await confirmInline(`套用「${preset.name}」会替换当前前置 / 后置消息，继续？`))) return;
+      // G10：套用前保留单步撤销快照
+      S.jbUndo = { pre: cloneJbMessages(CFG.jbPre), post: cloneJbMessages(CFG.jbPost), label: `套用「${preset.name}」` };
       // 深拷贝：套用后继续编辑，不会改到内置常量或持久化的自定义预设
       CFG.jbPre = cloneJbMessages(preset.pre);
       CFG.jbPost = cloneJbMessages(preset.post);
@@ -2078,11 +2212,12 @@ ${GUIDE}
     jbsaveconfirm: saveJbPresetDraft,
     jbupdateconfirm: updateJbPresetFromPending,
     jbdelconfirm: deleteJbPreset,
-    jbclear() {
+    async jbclear() {
       const pre = Array.isArray(CFG.jbPre) ? CFG.jbPre : [];
       const post = Array.isArray(CFG.jbPost) ? CFG.jbPost : [];
       if (!pre.length && !post.length) return;
-      if (!confirm('清空前置与后置的全部破限消息？')) return;
+      if (!(await confirmInline('清空前置与后置的全部破限消息？'))) return;
+      S.jbUndo = { pre: cloneJbMessages(CFG.jbPre), post: cloneJbMessages(CFG.jbPost), label: '清空破限编排' };
       CFG.jbPre = [];
       CFG.jbPost = [];
       saveCfg();
@@ -2091,6 +2226,22 @@ ${GUIDE}
       renderJb('pre');
       renderJb('post');
       $('#wbe-jbhint', root).text('套用会替换两个区域的现有内容，之后仍可自由编辑。');
+      refreshJbSum();
+    },
+    /** G10：撤销上一次「套用预设 / 清空」操作（单步，仅内存）。 */
+    jbu() {
+      const undo = S.jbUndo;
+      if (!undo) return toast.info('没有可撤销的破限操作');
+      CFG.jbPre = cloneJbMessages(undo.pre);
+      CFG.jbPost = cloneJbMessages(undo.post);
+      S.jbUndo = null;
+      saveCfg();
+      resetJbPresetUi();
+      renderJbPresetPanel();
+      renderJb('pre');
+      renderJb('post');
+      renderJbPreview();
+      toast.success(`已撤销：${undo.label}`);
     },
     jbadd(el) {
       const kind = el.data('k');
@@ -2136,7 +2287,7 @@ ${GUIDE}
       await apiCreateBook(n); S.book = n; await loadBooks();
     },
     async delbook() {
-      if (!S.book || !confirm(`确定删除整本世界书「${S.book}」？此操作无法撤销。`)) return;
+      if (!S.book || !(await confirmInline(`确定删除整本世界书「${S.book}」？此操作无法撤销。`))) return;
       await apiDeleteBook(S.book); S.book = ''; await loadBooks();
     },
     export() {
@@ -2231,7 +2382,7 @@ ${GUIDE}
       await act('已复制', () => apiCreateEntries(S.book, [r]));
     },
     async del() {
-      const e = cur(); if (!e || !confirm(`删除条目「${A.name(e)}」？（可用列表工具栏的「撤销」恢复）`)) return;
+      const e = cur(); if (!e || !(await confirmInline(`删除条目「${A.name(e)}」？（可用列表工具栏的「撤销」恢复）`))) return;
       setDirty(false); await act('已删除', () => apiDeleteEntries(S.book, [e.uid]));
     },
     async applyjson() {
@@ -2256,7 +2407,7 @@ ${GUIDE}
     async bdel() {
       const t = picked();
       if (!t.length) return toast.warning('请先勾选条目');
-      if (confirm(`删除选中的 ${t.length} 条？（可撤销）`)) await act('已删除', () => apiDeleteEntries(S.book, t.map(e => e.uid)));
+      if (await confirmInline(`删除选中的 ${t.length} 条？（可撤销）`)) await act('已删除', () => apiDeleteEntries(S.book, t.map(e => e.uid)));
     },
   };
 
@@ -2270,7 +2421,7 @@ ${GUIDE}
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.10.0',
+      version: 'v0.11.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
@@ -2287,6 +2438,8 @@ ${GUIDE}
     panel.dialog.classList.add('nvui-scope');
     panel.dialog.classList.toggle('nvui-theme-light', D.body.classList.contains('nvui-theme-light'));
     root = $(panel.panel);
+    // G13：危险操作的内联确认条（全局一条，所有标签页共用）
+    $(panel.body).prepend('<div id="wbe-inline-confirm" hidden></div>');
     closeBtnEl = panel.panel.querySelector('.nvui-panel-actions').lastElementChild;
     built = true;
     log.info('面板 DOM 构建完成', { tabs: TABS.length });
@@ -2302,6 +2455,7 @@ ${GUIDE}
           <button type="button" class="nvui-icon-btn" data-a="export" title="导出 JSON" aria-label="导出 JSON">${ico('fa-file-code')}</button>
           <button type="button" class="nvui-icon-btn" data-a="exportcsv" title="导出 CSV 表格 (Excel 兼容)" aria-label="导出 CSV">${ico('fa-file-csv')}</button>
         </div>
+        <div id="wbe-binding" class="nvui-hint" hidden></div>
         <label class="wbe-mini"><span>搜索</span><input id="wbe-q" class="nvui-input" placeholder="标题、关键词、分组、内容"></label>
         <label class="wbe-mini"><span>分组</span><select id="wbe-gflt" class="nvui-input"></select></label>
         <div class="wbe-bar">
@@ -2527,6 +2681,7 @@ ${GUIDE}
   function cleanupOwn() {
     if (cleaned) return;
     cleaned = true;
+    if (inlineConfirmResolve) settleInlineConfirm(false);
     $(D).off('keydown.wbe');
     if (capKey) { D.removeEventListener('keydown', capKey, true); capKey = null; }
     if (capClick && panel) { panel.dialog.removeEventListener('click', capClick, true); capClick = null; }

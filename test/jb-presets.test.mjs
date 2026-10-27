@@ -4,13 +4,16 @@ import assert from 'node:assert/strict';
 import { buildMessages } from '../src/ai-prompts.js';
 import {
   BUILTIN_JB_PRESETS,
+  CONFIG_SCHEMA_VERSION,
   MAX_JB_MESSAGES,
   MAX_PRESET_NAME_CODE_POINTS,
+  buildConfigBundle,
   createCustomPreset,
   findBuiltinPresetByName,
   findCustomPresetByName,
   readCustomPresets,
   updateCustomPreset,
+  validateConfigBundle,
   validateJbDraft,
   validatePresetName,
 } from '../src/jb-presets.js';
@@ -173,4 +176,54 @@ test('模板经 buildMessages 的 json / text 编排与 format 契约一致', ()
   assert.match(jsonRetry.at(-1).content, /重试/);
   assert.equal(jsonRetry[4].content, template.post[0].content, '后置消息仍在契约与重试提醒之前');
   assert.equal(template.pre.length, 2, 'buildMessages 不得改写模板');
+});
+
+// ---------------------------------------------------------------------------
+// G15：配置备份（不含密钥）
+// ---------------------------------------------------------------------------
+test('buildConfigBundle 只导出可迁移用户资产，绝不携带 API Key / 接口地址', () => {
+  const preset = createCustomPreset({ name: '我的预设', pre: region(1), post: region(1, 'user') });
+  const bundle = buildConfigBundle({
+    key: 'sk-should-not-leak', apiurl: 'https://secret.example/v1', model: 'secret-model', temp: 0.3, maxTokens: 1,
+    style: '第三人称', presets: [{ l: '润色', t: '润色文本' }, { l: '', t: '无效' }],
+    jbCustomPresets: [preset],
+  });
+  assert.equal(bundle.kind, 'wbe-config');
+  assert.equal(bundle.schemaVersion, CONFIG_SCHEMA_VERSION);
+  assert.equal(bundle.style, '第三人称');
+  assert.deepEqual(bundle.presets, [{ l: '润色', t: '润色文本' }]);
+  assert.equal(bundle.jbCustomPresets.length, 1);
+  const text = JSON.stringify(bundle);
+  for (const secret of ['sk-should-not-leak', 'secret.example', 'secret-model']) {
+    assert.ok(!text.includes(secret), `导出内容不得包含 ${secret}`);
+  }
+});
+
+test('validateConfigBundle 接受本扩展导出，跳过坏条目并报告数量', () => {
+  const bundle = buildConfigBundle({
+    style: '简洁',
+    presets: [{ l: '润色', t: '润色文本' }],
+    jbCustomPresets: [createCustomPreset({ name: '好预设', pre: region(1), post: region(1, 'user') })],
+  });
+  const result = validateConfigBundle(bundle);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.style, '简洁');
+  assert.equal(result.value.presets.length, 1);
+  assert.equal(result.value.jbCustomPresets.length, 1);
+
+  const withBad = {
+    ...bundle,
+    jbCustomPresets: [bundle.jbCustomPresets[0], { name: '坏预设', pre: '不是数组', post: [] }, { name: '空预设', pre: [], post: [] }],
+  };
+  const filtered = validateConfigBundle(withBad);
+  assert.equal(filtered.ok, true);
+  assert.equal(filtered.value.jbCustomPresets.length, 1);
+  assert.equal(filtered.skipped, 2);
+});
+
+test('validateConfigBundle 拒绝错误格式 / 版本 / 空内容', () => {
+  assert.match(validateConfigBundle(null).error, /JSON 对象/);
+  assert.match(validateConfigBundle({ kind: 'other', schemaVersion: 1 }).error, /kind/);
+  assert.match(validateConfigBundle({ kind: 'wbe-config', schemaVersion: 999 }).error, /版本/);
+  assert.match(validateConfigBundle({ kind: 'wbe-config', schemaVersion: CONFIG_SCHEMA_VERSION, presets: [], jbCustomPresets: [], style: ' ' }).error, /没有可导入/);
 });

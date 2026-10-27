@@ -13,7 +13,7 @@ const trackedFiles = () => execSync('git ls-files --cached --others --exclude-st
 
 test('extension manifest references local assets and exported lifecycle hooks',async()=>{
   const manifest=JSON.parse(read('manifest.json'));
-  assert.equal(manifest.version,'0.10.0');
+  assert.equal(manifest.version,'0.11.0');
   for(const key of ['js','css']) assert.ok(existsSync(new URL('../'+manifest[key],import.meta.url)));
   const source=read(manifest.js);
   for(const hook of Object.values(manifest.hooks)) assert.match(source,new RegExp(`export (?:async )?function ${hook}\\(`));
@@ -232,4 +232,28 @@ test('storage red lines and Wave 2 contracts are wired',()=>{
   for(const key of dataAs){
     assert.ok(actions.has(key),`data-a="${key}" 没有对应的 action`);
   }
+});
+
+test('Wave 3 contracts are wired',()=>{
+  const editor=read('src/Worldbook-Editor.js');
+  // G13：危险操作改用面板内联确认
+  assert.match(editor,/wbe-inline-confirm/);
+  assert.match(editor,/confirmInline/);
+  // G14：高级机制只读展示
+  assert.match(editor,/高级机制（只读）/);
+  assert.match(editor,/advancedInfo/);
+  // G10：破限编排预览 + 单步撤销
+  assert.match(editor,/wbe-jbpreview/);
+  assert.match(editor,/jbUndo/);
+  assert.match(editor,/data-a="jbu"/);
+  // G15：配置备份（不含密钥），校验逻辑放在 jb-presets 纯函数
+  assert.match(editor,/wbe-acc-backup/);
+  assert.match(editor,/buildConfigBundle/);
+  assert.match(editor,/validateConfigBundle/);
+  const presets=read('src/jb-presets.js');
+  assert.match(presets,/export function buildConfigBundle/);
+  assert.match(presets,/export function validateConfigBundle/);
+  // G12：世界书绑定可视化
+  assert.match(editor,/wbe-binding/);
+  assert.match(editor,/renderBinding/);
 });

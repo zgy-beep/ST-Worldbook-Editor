@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.10.0`，宿主最低版本 `1.17.0`。
+当前版本 `0.11.0`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -165,6 +165,13 @@ npm run test:browser
   - **G04** 编辑区上一条 / 下一条（`goAdjacent`）、`beforeunload` 未保存拦截、移动端 `.wbe-footbar` 吸底。
   - **A3** 体检孤岛检查改倒排索引 + 惰性计算（`refreshTool(force)`，仅工具页可见时算）。
   - **A4** `ui-contract` 新增存储红线与 `data-a` ↔ `actions` 一致性守卫；本批测试总数 89。
+- **Wave 3 迭代（2026-10-27）**：
+  - **G13** 危险操作（删条目 / 批删 / 删书 / 清空破限 / 清空日志 / 清空配置 / 套用覆盖）改面板内联确认条 `confirmInline`（`#wbe-inline-confirm`），不再用原生 `confirm`。
+  - **G10** 破限页新增只读「编排预览」`#wbe-jbpreview` 与单步撤销：`jbapply` / `jbclear` 前把 `S.jbUndo` 快照进内存，`jbu` 恢复并落盘。
+  - **G14** 编辑区高级机制只读块：扫描深度 / `at_depth` 角色 / 递归（prevent_incoming / prevent_outgoing / delay_until）/ 效果（sticky / cooldown / delay）；写入仍走 JSON 视图。
+  - **G15** `jb-presets.js` 新增 `buildConfigBundle` / `validateConfigBundle`（`CONFIG_SCHEMA_VERSION=1`，kind=`wbe-config`，明确排除 key / apiurl / model / 温度）；设置页「配置备份（不含密钥）」导入先校验、内联确认、坏条目跳过。
+  - **G12** 条目页 `#wbe-binding` 展示角色卡 / 聊天 / 全局绑定；宿主没有对应助手 API 时静默隐藏。
+  - **实机回归**：本机 SillyTavern 1.19.0（`http://127.0.0.1:8000`，Junction 加载）验证面板 720×567、5 Tab 全渲染、工具页 44 项体检、日志 10 条、无 console / page error、关闭后覆盖层清理；本批测试总数 93。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），
