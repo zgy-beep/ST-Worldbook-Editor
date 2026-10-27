@@ -4,9 +4,16 @@
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
-当前版本：`0.11.0`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
+当前版本：`0.11.1`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
 
-## 0.11.0 更新摘要
+## 0.11.1 修复
+
+- **实机面板高度偏矮（567px）**：`persist.size:false` 只阻止 Kit 恢复尺寸，但 Kit 在 `open()` 的 `applyClamping()` 里仍会读取
+  `extensionSettings.layout.nvui_state_wbe.size` 的旧 px 高度并写回内联样式。新增 `runtime.layoutStorage.forgetSize()`，
+  面板构建前清掉旧 `size`（保留 Tab / 折叠条记忆），高度重新由 CSS `94vh` 决定；浏览器冒烟新增「预置旧 400px 存档仍须 ≥90vh」
+  回归用例，实机复测面板高度 **846px（94vh）**。
+
+### 0.11.0 更新摘要（历史）
 
 - **危险操作内联确认（G13）**：删除条目 / 批量删除 / 删除世界书 / 清空破限 / 清空日志 / 清空配置 / 套用覆盖等操作改为面板内联确认条，不再打断原生 `confirm` 弹窗。
 - **破限编排预览与单步撤销（G10）**：破限页新增只读「编排预览」（前置 → 任务 → 后置 → 契约 → 重试 → assistant 预填充），并记录上一次套用 / 清空的快照，可一键撤销。

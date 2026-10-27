@@ -405,6 +405,26 @@ export const layoutStorage = {
     persistSettings();
   },
 
+  /**
+   * 删除某个面板布局状态里遗留的 size（宽度 / 高度 / 最大化）。
+   *
+   * 背景：本扩展 createPanel 已关闭 `persist.size`，但 Kit v2.8.0 在
+   * `open()` → `applyClamping()` 时仍会读取 layout 里的旧 `size.height` 并写回内联 px，
+   * 导致旧分辨率存档把面板钳回 400~600px（实机 567px），CSS token 的 94vh 失效。
+   * 启动前清掉旧 size，只保留 tab / accordion 状态即可让 CSS 高度重新生效。
+   */
+  forgetSize(key) {
+    const storageKey = normalizeLayoutKey(key);
+    if (!storageKey) return false;
+    const settings = getSettings();
+    const layout = settings.layout;
+    const state = layout[storageKey];
+    if (!state || typeof state !== 'object' || !hasOwn(state, 'size') || state.size == null) return false;
+    delete state.size;
+    persistSettings();
+    return true;
+  },
+
   remove(key) {
     const storageKey = normalizeLayoutKey(key);
     if (!storageKey) return;
