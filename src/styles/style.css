@@ -1,5 +1,5 @@
 /**
- * 世界书编辑器 v0.8.0 · 业务样式
+ * 世界书编辑器 v0.9.0 · 业务样式
  * ------------------------------------------------------------------
  * 设计基底：本地 SillyTavern NVUI Kit v2.8.0。
  * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
@@ -631,4 +631,13 @@
     color: var(--nvui-text-3);
     font-size: var(--nvui-fs-2xs);
     white-space: pre-wrap;
+}
+
+/* 触发测试命中行可点击跳转（§9.1 A2） */
+#wbe-overlay .wbe-hitrow[data-a] {
+    cursor: pointer;
+}
+
+#wbe-overlay .wbe-hitrow[data-a]:hover {
+    background: var(--nvui-block-bg);
 }

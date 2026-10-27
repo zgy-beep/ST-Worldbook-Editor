@@ -9,7 +9,7 @@
 
 import { initializeEditor } from './Worldbook-Editor.js';
 import { captureGlobalErrors, getLogger } from './logger.js';
-import { createRuntime } from './runtime.js';
+import { createRuntime, getHostEventApi, peekGlobalNVUI } from './runtime.js';
 
 const LABEL = '世界书编辑器';
 const MENU_ID = 'wbe-menu';
@@ -63,32 +63,11 @@ let pagehideHandler = null;
 let previousOpen = undefined;
 let capturedPreviousOpen = false;
 
-function getHostContext() {
-  try {
-    const st = globalThis.SillyTavern;
-    if (st && typeof st.getContext === 'function') {
-      const context = st.getContext();
-      if (context && typeof context === 'object') return context;
-    }
-  } catch (err) {
-    log.warn('读取 SillyTavern.getContext() 失败', err);
-  }
-  return null;
-}
-
-function getEventApi() {
-  const context = getHostContext();
-  const types = context?.eventTypes || context?.event_types || {};
-  return {
-    source: context?.eventSource || null,
-    ready: types.APP_READY || 'app_ready',
-  };
-}
-
 function registerAppReady() {
   if (appReadyHandler || appReady) return true;
 
-  const { source, ready } = getEventApi();
+  // 宿主事件源统一走 runtime.getHostEventApi()，index.js 不直接碰 SillyTavern.getContext()
+  const { source, ready } = getHostEventApi();
   if (!source || typeof source.on !== 'function') return false;
 
   appReadySource = source;
@@ -139,14 +118,6 @@ function isNVUI(api) {
   return !!api && typeof api.createPanel === 'function';
 }
 
-function getGlobalNVUI() {
-  try {
-    return globalThis.NVUI || null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * NVUI Kit v2.8.0 新增运行时自检：一次返回版本漂移 / CSS 未加载 / 玻璃回退等诊断。
  * 结果写进诊断日志（控制台同步镜像）、不打断启动、不进用户界面；`glass-auto-fallback`
@@ -179,12 +150,12 @@ async function ensureNVUI() {
   if (nvuiLoading) return nvuiLoading;
 
   nvuiLoading = (async () => {
-    const prior = getGlobalNVUI();
+    const prior = peekGlobalNVUI();
     let loaded = null;
 
     try {
       await import('../ui-kit/nvui-api.js');
-      loaded = getGlobalNVUI();
+      loaded = peekGlobalNVUI();
     } catch (err) {
       log.error('本地 NVUI Kit 加载失败', err);
     }
@@ -217,7 +188,7 @@ async function ensureNVUI() {
 function notify(message, type = 'info') {
   const text = String(message || '');
   const full = text.startsWith(`${LABEL}：`) ? text : `${LABEL}：${text}`;
-  const api = isNVUI(nvui) ? nvui : getGlobalNVUI();
+  const api = isNVUI(nvui) ? nvui : peekGlobalNVUI();
 
   if (isNVUI(api) && typeof api.showToast === 'function') {
     try {
