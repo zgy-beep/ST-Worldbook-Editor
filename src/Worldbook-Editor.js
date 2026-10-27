@@ -1,4 +1,4 @@
-// 世界书编辑器 v0.11.0 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.11.1 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
@@ -814,7 +814,7 @@ ${GUIDE}
     let host = null;
     try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
     return {
-      扩展版本: '0.11.0',
+      扩展版本: '0.11.1',
       组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
       酒馆版本: host && host.version ? host.version : '未知',
       当前世界书: S.book || '（未选择）',
@@ -892,7 +892,7 @@ ${GUIDE}
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.11.0</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.11.1</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -2418,10 +2418,16 @@ ${GUIDE}
   async function build() {
     if (built) return;
     await ensureNVUI();
+    // 修复实机面板偏矮：Kit 在 open() 时会用 layout 里遗留的旧 size 覆盖 CSS 高度
+    // （persist.size=false 只阻止恢复，不阻止 applyClamping 读旧存档）。
+    // 启动前清掉旧 size，保留 tab / accordion 记忆；高度完全交给 CSS token 94vh。
+    let clearedStaleSize = false;
+    try { clearedStaleSize = runtime.layoutStorage?.forgetSize?.('nvui_state_wbe') === true; } catch (err) { log.warn('清理遗留面板尺寸失败', err); }
+    if (clearedStaleSize) log.info('已清理遗留的面板像素尺寸，桌面高度交由 CSS 94vh 控制');
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.11.0',
+      version: 'v0.11.1',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）

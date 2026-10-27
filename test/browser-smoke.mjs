@@ -216,6 +216,15 @@ page.on('request', req => { assert.ok(req.url().startsWith(origin), `Unexpected 
 try {
   await page.goto(origin);
   await page.locator('#wbe-menu').waitFor();
+  // 回归（实机 567px 问题）：旧布局存档里的 px 高度不得压矮面板
+  await page.evaluate(() => {
+    settings.st_worldbook_editor.layout = settings.st_worldbook_editor.layout || {};
+    settings.st_worldbook_editor.layout.nvui_state_wbe = {
+      version: 1, timestamp: Date.now(),
+      size: { width: 720, height: 400, isMaximized: false },
+      tab: 'entries', accordion: {},
+    };
+  });
   await page.locator('#wbe-menu').click();
   await page.locator('#wbe-overlay:not([hidden])').waitFor({timeout:10000}).catch(async error => {
     const state = await page.evaluate(() => ({
@@ -237,6 +246,8 @@ try {
   assert.equal(desktopHeight.inline, '', '面板高度不应被持久化 px 值内联固定');
   assert.ok(desktopHeight.height >= desktopHeight.vh * 0.9,
     `桌面面板高度应 ≥ 90vh，实际 ${desktopHeight.height}/${desktopHeight.vh}`);
+  const staleLayout = await page.evaluate(() => settings.st_worldbook_editor.layout?.nvui_state_wbe || null);
+  assert.equal(staleLayout?.size, undefined, '启动时应清理旧布局里的 px 尺寸，避免把面板压矮');
   // G04：编辑区上一条 / 下一条
   assert.equal(await page.locator('[data-a=preved]').count(), 1, '编辑区应有「上一条」按钮');
   assert.equal(await page.locator('[data-a=nexted]').count(), 1, '编辑区应有「下一条」按钮');
@@ -386,7 +397,7 @@ try {
     });
     log.error('日志冒烟-error', new Error('smoke-boom'));
     window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
-    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.11.0' } }) };
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.11.1' } }) };
   });
   assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
   assert.match(logProbe.text, /日志冒烟-未捕获/);

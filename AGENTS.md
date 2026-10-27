@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.11.0`，宿主最低版本 `1.17.0`。
+当前版本 `0.11.1`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -172,6 +172,10 @@ npm run test:browser
   - **G15** `jb-presets.js` 新增 `buildConfigBundle` / `validateConfigBundle`（`CONFIG_SCHEMA_VERSION=1`，kind=`wbe-config`，明确排除 key / apiurl / model / 温度）；设置页「配置备份（不含密钥）」导入先校验、内联确认、坏条目跳过。
   - **G12** 条目页 `#wbe-binding` 展示角色卡 / 聊天 / 全局绑定；宿主没有对应助手 API 时静默隐藏。
   - **实机回归**：本机 SillyTavern 1.19.0（`http://127.0.0.1:8000`，Junction 加载）验证面板 720×567、5 Tab 全渲染、工具页 44 项体检、日志 10 条、无 console / page error、关闭后覆盖层清理；本批测试总数 93。
+- **修复：实机面板偏矮（0.11.1，2026-10-27）**：Kit `persist.size:false` 只在 `applyLoadedState` 阶段阻止恢复，
+  `open()` 的 `applyClamping()` 仍会读 layout 里旧的 `nvui_state_wbe.size.height` 写回内联 px（实机 567px）。
+  新增 `runtime.layoutStorage.forgetSize()`，在 `build()` 创建面板前清除旧 `size`（保留 tab / accordion），
+  高度重新由 CSS `94vh` 控制；浏览器冒烟预置旧 400px 存档后断言 ≥90vh 且 `size` 被清理；实机复测 846px。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

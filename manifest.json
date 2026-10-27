@@ -4,7 +4,7 @@
   "js": "src/index.js",
   "css": "src/styles/style.css",
   "author": "ST-Worldbook-Editor contributors",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "在 SillyTavern 中以标准前端扩展方式管理世界书：条目编辑、批量操作、体检、触发测试与 AI 辅助。需要酒馆助手（Tavern Helper / JS-Slash-Runner）。",
   "requires": [],
   "optional": [],
