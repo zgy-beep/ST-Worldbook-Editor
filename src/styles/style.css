@@ -1,5 +1,5 @@
 /**
- * 世界书编辑器 v0.11.1 · 业务样式
+ * 世界书编辑器 v0.11.2 · 业务样式
  * ------------------------------------------------------------------
  * 设计基底：本地 SillyTavern NVUI Kit v2.8.0。
  * 顶部 @import 必须位于所有业务规则之前（README §2.1.1）。
@@ -647,4 +647,123 @@
 
 #wbe-overlay .wbe-hitrow[data-a]:hover {
     background: var(--nvui-block-bg);
+}
+
+/* ==========================================================================
+ * 帮助与快捷键：三步 / 快捷键 / 术语 三段式对齐布局（G05）
+ * ========================================================================== */
+
+#wbe-overlay .wbe-help {
+    display: grid;
+    gap: var(--nvui-space-4);
+}
+
+#wbe-overlay .wbe-help-section {
+    display: grid;
+    gap: var(--nvui-space-2);
+}
+
+#wbe-overlay .wbe-help-title {
+    color: var(--nvui-text-2);
+    font-size: var(--nvui-fs-sm);
+    font-weight: 600;
+}
+
+#wbe-overlay .wbe-steps {
+    display: grid;
+    gap: var(--nvui-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+#wbe-overlay .wbe-step {
+    display: grid;
+    grid-template-columns: var(--nvui-space-5) minmax(0, 1fr);
+    gap: var(--nvui-space-2);
+    align-items: start;
+    color: var(--nvui-text);
+}
+
+#wbe-overlay .wbe-step-n {
+    display: inline-grid;
+    place-items: center;
+    width: var(--nvui-space-5);
+    height: var(--nvui-space-5);
+    border: 1px solid var(--nvui-glass-line);
+    border-radius: 50%;
+    background: var(--nvui-block-bg);
+    color: var(--nvui-accent);
+    font-size: var(--nvui-fs-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+#wbe-overlay .wbe-kbd-grid {
+    display: grid;
+    grid-template-columns: minmax(168px, max-content) minmax(0, 1fr);
+    gap: var(--nvui-space-1) var(--nvui-space-4);
+    align-items: center;
+}
+
+#wbe-overlay .wbe-kbd-cell {
+    min-width: 0;
+}
+
+#wbe-overlay .wbe-kbd-desc {
+    min-width: 0;
+    color: var(--nvui-text-2);
+}
+
+#wbe-overlay .wbe-kbd {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--nvui-space-05);
+    flex-wrap: wrap;
+    color: var(--nvui-text-3);
+}
+
+#wbe-overlay .wbe-help kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    padding: 1px var(--nvui-space-15);
+    border: 1px solid var(--nvui-glass-line);
+    border-bottom-width: 2px;
+    border-radius: var(--nvui-radius-sm);
+    background: var(--nvui-block-bg);
+    color: var(--nvui-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--nvui-fs-2xs);
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+#wbe-overlay .wbe-terms {
+    display: grid;
+    grid-template-columns: minmax(84px, max-content) minmax(0, 1fr);
+    gap: var(--nvui-space-1) var(--nvui-space-4);
+    margin: 0;
+}
+
+#wbe-overlay .wbe-terms dt {
+    color: var(--nvui-text);
+    font-weight: 600;
+}
+
+#wbe-overlay .wbe-terms dd {
+    margin: 0;
+    color: var(--nvui-text-2);
+}
+
+@media (max-width: 600px) {
+    #wbe-overlay .wbe-kbd-grid,
+    #wbe-overlay .wbe-terms {
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--nvui-space-1);
+    }
+
+    #wbe-overlay .wbe-kbd-desc {
+        margin-bottom: var(--nvui-space-2);
+    }
 }

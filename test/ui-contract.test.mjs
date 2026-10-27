@@ -13,7 +13,7 @@ const trackedFiles = () => execSync('git ls-files --cached --others --exclude-st
 
 test('extension manifest references local assets and exported lifecycle hooks',async()=>{
   const manifest=JSON.parse(read('manifest.json'));
-  assert.equal(manifest.version,'0.11.1');
+  assert.equal(manifest.version,'0.11.2');
   for(const key of ['js','css']) assert.ok(existsSync(new URL('../'+manifest[key],import.meta.url)));
   const source=read(manifest.js);
   for(const hook of Object.values(manifest.hooks)) assert.match(source,new RegExp(`export (?:async )?function ${hook}\\(`));

@@ -1,4 +1,4 @@
-// 世界书编辑器 v0.11.1 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.11.2 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
@@ -814,7 +814,7 @@ ${GUIDE}
     let host = null;
     try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
     return {
-      扩展版本: '0.11.1',
+      扩展版本: '0.11.2',
       组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
       酒馆版本: host && host.version ? host.version : '未知',
       当前世界书: S.book || '（未选择）',
@@ -892,7 +892,7 @@ ${GUIDE}
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.11.1</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.11.2</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -925,9 +925,36 @@ ${GUIDE}
       <div class="nvui-acc" id="wbe-acc-help">
         <button type="button" class="nvui-acc-head" aria-expanded="false"><span class="nvui-acc-title">${ico('fa-circle-question')}帮助与快捷键</span><span class="nvui-acc-summary">新手三步 · 术语 · 快捷键</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
-          <p class="nvui-hint"><b>三步上手</b>：① 在「条目」页选择或新建世界书 → ② 新建条目（或选一个模板），填标题 / 关键词 / 内容并保存 → ③ 到「工具」页跑体检与触发测试，再到「AI」页让模型帮你改。</p>
-          <p class="nvui-hint"><b>快捷键</b>：Ctrl / Cmd + S 保存条目；Ctrl / Cmd + Enter 在 AI 页生成；Alt + N 新建条目；Alt + ↑ / ↓ 上一条 / 下一条；Alt + Shift + ↑ / ↓ 在可拖拽排序模式下调换顺序。</p>
-          <p class="nvui-hint"><b>术语</b>：常驻 = 每轮都注入；选择性 = 命中主 / 次关键词才注入；向量化 = 按向量相似度检索；位置 / 深度 / order 决定注入顺序；概率 = 每次触发前的掷骰。</p>
+          <div class="wbe-help">
+            <section class="wbe-help-section">
+              <div class="wbe-help-title">三步上手</div>
+              <ol class="wbe-steps">
+                <li class="wbe-step"><span class="wbe-step-n" aria-hidden="true">1</span><span>在「条目」页选择或新建世界书。</span></li>
+                <li class="wbe-step"><span class="wbe-step-n" aria-hidden="true">2</span><span>新建条目（或选一个模板），填标题 / 关键词 / 内容并保存。</span></li>
+                <li class="wbe-step"><span class="wbe-step-n" aria-hidden="true">3</span><span>到「工具」页跑体检与触发测试，再到「AI」页让模型帮你改。</span></li>
+              </ol>
+            </section>
+            <section class="wbe-help-section">
+              <div class="wbe-help-title">快捷键</div>
+              <div class="wbe-kbd-grid">
+                <div class="wbe-kbd-cell"><span class="wbe-kbd"><kbd>Ctrl</kbd><span>/</span><kbd>Cmd</kbd><span>+</span><kbd>S</kbd></span></div><div class="wbe-kbd-desc">保存当前条目</div>
+                <div class="wbe-kbd-cell"><span class="wbe-kbd"><kbd>Ctrl</kbd><span>/</span><kbd>Cmd</kbd><span>+</span><kbd>Enter</kbd></span></div><div class="wbe-kbd-desc">在 AI 页生成修改建议</div>
+                <div class="wbe-kbd-cell"><span class="wbe-kbd"><kbd>Alt</kbd><span>+</span><kbd>N</kbd></span></div><div class="wbe-kbd-desc">新建条目</div>
+                <div class="wbe-kbd-cell"><span class="wbe-kbd"><kbd>Alt</kbd><span>+</span><kbd>↑</kbd><span>/</span><kbd>↓</kbd></span></div><div class="wbe-kbd-desc">上一条 / 下一条</div>
+                <div class="wbe-kbd-cell"><span class="wbe-kbd"><kbd>Alt</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>↑</kbd><span>/</span><kbd>↓</kbd></span></div><div class="wbe-kbd-desc">在可拖拽排序模式下调整顺序</div>
+              </div>
+            </section>
+            <section class="wbe-help-section">
+              <div class="wbe-help-title">术语</div>
+              <dl class="wbe-terms">
+                <dt>常驻</dt><dd>每轮都会注入。</dd>
+                <dt>选择性</dt><dd>命中主关键词（及次要逻辑）才注入。</dd>
+                <dt>向量化</dt><dd>按向量相似度检索注入。</dd>
+                <dt>位置 / 深度 / order</dt><dd>决定条目在上下文中的注入顺序。</dd>
+                <dt>概率</dt><dd>每次触发前按百分比掷骰。</dd>
+              </dl>
+            </section>
+          </div>
         </div></div>
       </div>
       <div class="nvui-acc" id="wbe-acc-diag">
@@ -2427,7 +2454,7 @@ ${GUIDE}
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.11.1',
+      version: 'v0.11.2',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）

@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.11.1`，宿主最低版本 `1.17.0`。
+当前版本 `0.11.2`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -176,6 +176,9 @@ npm run test:browser
   `open()` 的 `applyClamping()` 仍会读 layout 里旧的 `nvui_state_wbe.size.height` 写回内联 px（实机 567px）。
   新增 `runtime.layoutStorage.forgetSize()`，在 `build()` 创建面板前清除旧 `size`（保留 tab / accordion），
   高度重新由 CSS `94vh` 控制；浏览器冒烟预置旧 400px 存档后断言 ≥90vh 且 `size` 被清理；实机复测 846px。
+- **帮助与快捷键排版（0.11.2，2026-10-27）**：`#wbe-acc-help` 从三段长文本改为结构化布局
+  `.wbe-help`（三步编号列表 `.wbe-step` + 两列快捷键 `.wbe-kbd-grid`（`kbd` 键帽）+ 术语定义表 `.wbe-terms`），
+  窄屏 ≤600px 自动单列；冒烟断言 3 步骤 / 5 行快捷键 / 5 条术语 / 快捷键两列；实机截图确认。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

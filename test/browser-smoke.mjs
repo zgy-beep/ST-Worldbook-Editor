@@ -384,6 +384,17 @@ try {
   await page.locator('#wbe-acc-help .nvui-acc-head').click();
   await page.waitForFunction(() => document.querySelector('#wbe-acc-help')?.classList.contains('is-open'));
   assert.match(await page.locator('#wbe-acc-help').textContent(), /快捷键/, '帮助区应包含快捷键说明');
+  // G05：帮助内容必须是对齐的结构化布局（三步列表 / 两列快捷键 / 术语定义表）
+  assert.match(await page.locator('#wbe-acc-help').textContent(), /三步上手/);
+  assert.match(await page.locator('#wbe-acc-help').textContent(), /术语/);
+  assert.equal(await page.locator('#wbe-acc-help .wbe-step').count(), 3, '三步上手应为 3 条列表项');
+  assert.equal(await page.locator('#wbe-acc-help .wbe-kbd-desc').count(), 5, '快捷键应有 5 行');
+  const helpColumns = await page.evaluate(() => {
+    const grid = document.querySelector('#wbe-acc-help .wbe-kbd-grid');
+    return grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0;
+  });
+  assert.ok(helpColumns >= 2, `快捷键应为两列对齐，实际列数 ${helpColumns}`);
+  assert.equal(await page.locator('#wbe-acc-help .wbe-terms dt').count(), 5, '术语应有 5 条');
   await page.locator('#wbe-acc-diag .nvui-acc-head').click();
   assert.ok(await page.locator('#wbe-acc-diag').evaluate(el => el.classList.contains('is-open')),
     '诊断日志折叠条应能展开');
@@ -397,7 +408,7 @@ try {
     });
     log.error('日志冒烟-error', new Error('smoke-boom'));
     window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
-    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.11.1' } }) };
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.11.2' } }) };
   });
   assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
   assert.match(logProbe.text, /日志冒烟-未捕获/);

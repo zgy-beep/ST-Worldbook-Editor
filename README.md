@@ -4,9 +4,15 @@
 
 本扩展不再要求把整段脚本粘贴进酒馆助手的脚本库。它通过 `manifest.json` 声明入口、样式和生命周期钩子，可由 SillyTavern 扩展管理器安装；界面与运行时资源全部随扩展本地提供，不依赖网络 CDN。
 
-当前版本：`0.11.1`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
+当前版本：`0.11.2`。仓库地址：<https://github.com/zgy-beep/ST-Worldbook-Editor>。
 
-## 0.11.1 修复
+## 0.11.2 界面整理
+
+- **帮助与快捷键排版**：原来的三段长文本改为结构化对齐布局——「三步上手」编号列表、「快捷键」两列（左侧 `kbd` 键帽、右侧说明）、
+  「术语」定义表；窄屏（≤600px）自动降为单列。浏览器冒烟新增「3 步骤 / 5 行快捷键 / 5 条术语 / 两列对齐」断言，
+  实机 SillyTavern 1.19.0 截图确认排版整齐。
+
+### 0.11.1 修复（历史）
 
 - **实机面板高度偏矮（567px）**：`persist.size:false` 只阻止 Kit 恢复尺寸，但 Kit 在 `open()` 的 `applyClamping()` 里仍会读取
   `extensionSettings.layout.nvui_state_wbe.size` 的旧 px 高度并写回内联样式。新增 `runtime.layoutStorage.forgetSize()`，
