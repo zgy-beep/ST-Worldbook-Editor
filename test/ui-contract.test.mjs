@@ -13,7 +13,7 @@ const trackedFiles = () => execSync('git ls-files --cached --others --exclude-st
 
 test('extension manifest references local assets and exported lifecycle hooks',async()=>{
   const manifest=JSON.parse(read('manifest.json'));
-  assert.equal(manifest.version,'0.9.0');
+  assert.equal(manifest.version,'0.10.0');
   for(const key of ['js','css']) assert.ok(existsSync(new URL('../'+manifest[key],import.meta.url)));
   const source=read(manifest.js);
   for(const hook of Object.values(manifest.hooks)) assert.match(source,new RegExp(`export (?:async )?function ${hook}\\(`));
@@ -185,4 +185,51 @@ test('host access stays inside runtime.js and Wave 1 safeguards are wired',()=>{
   assert.doesNotMatch(rules,/^\s*import\s/m);
   assert.match(rules,/invalid-regex/);
   assert.match(rules,/redos/);
+});
+
+test('storage red lines and Wave 2 contracts are wired',()=>{
+  const stripJsComments=source=>source
+    .replace(/\/\*[\s\S]*?\*\//g,'')
+    .replace(/(^|\n)[ \t]*\/\/[^\n]*/g,'$1');
+  const srcFiles=['src/index.js','src/runtime.js','src/Worldbook-Editor.js','src/ai-prompts.js','src/jb-presets.js','src/worldbook-api.js','src/health-rules.js','src/logger.js','src/trigger-sim.js'];
+  // A4：存储红线（任何模块都不得清空宿主 localStorage）
+  for(const file of srcFiles){
+    assert.doesNotMatch(stripJsComments(read(file)),/localStorage\.clear\s*\(/,`${file} 不得调用 localStorage.clear()`);
+  }
+  assert.match(read('src/runtime.js'),/st_worldbook_editor/);
+
+  const editor=read('src/Worldbook-Editor.js');
+  // 业务层不直接碰宿主设置存储 / context
+  assert.doesNotMatch(stripJsComments(editor),/extensionSettings|SillyTavern\.getContext/);
+
+  // G03：触发仿真抽成可测纯函数模块
+  assert.match(editor,/from '\.\/trigger-sim\.js'/);
+  assert.match(read('src/trigger-sim.js'),/from '\.\/health-rules\.js'/);
+
+  // G08：导入先预览、确认后追加；导出「勾选优先」
+  assert.match(editor,/wbe-import-preview/);
+  assert.match(editor,/importconfirm/);
+  assert.match(editor,/S\.checked\.size \? picked\(\) : S\.entries/);
+
+  // G09：AI 结果逐字段采纳
+  assert.match(editor,/aokf/);
+  assert.match(editor,/采纳「/);
+
+  // G11：分批失败保留部分结果 + 重试失败批次
+  assert.match(editor,/aicretry/);
+  assert.match(editor,/retryFailedAI/);
+
+  // G04：上一条/下一条、离开页面前拦截、移动端吸底保存栏
+  assert.match(editor,/data-a="preved"/);
+  assert.match(editor,/beforeunload/);
+  assert.match(stripComments(read('src/styles/style.css')),/position:\s*sticky/);
+
+  // A4：data-a ↔ actions 一一对应（静态守卫，防止按钮没有处理函数）
+  const actionsStart=editor.indexOf('const actions = {');
+  const actionsBlock=editor.slice(actionsStart, editor.indexOf('\n  };', actionsStart));
+  const actions=new Set([...actionsBlock.matchAll(/(?:^|\n)\s{4}(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?:\(|:|,)/g)].map(match=>match[1]));
+  const dataAs=new Set([...editor.matchAll(/data-a="([A-Za-z_$][\w$-]*)"/g)].map(match=>match[1]));
+  for(const key of dataAs){
+    assert.ok(actions.has(key),`data-a="${key}" 没有对应的 action`);
+  }
 });

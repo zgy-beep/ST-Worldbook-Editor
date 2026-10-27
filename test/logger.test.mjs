@@ -121,10 +121,10 @@ test('exportText：包含环境快照、级别与明细，不泄露密钥', () =
   const log = quietLogger();
   log.info('启动完成');
   log.error('保存失败', { key: 'sk-export-secret-123456', error: new Error('quota exceeded') });
-  const text = log.exportText({ env: { 扩展版本: '0.9.0', Kit: '2.8.0', 页面: 'http://127.0.0.1:8000/#chat' } });
+  const text = log.exportText({ env: { 扩展版本: '0.10.0', Kit: '2.8.0', 页面: 'http://127.0.0.1:8000/#chat' } });
   assert.match(text, /ST-Worldbook-Editor 诊断日志/);
   assert.match(text, /导出时间: 2026-10-26 23:05:07\.042/);
-  assert.match(text, /扩展版本: 0\.9\.0/);
+  assert.match(text, /扩展版本: 0\.10\.0/);
   assert.match(text, /\[INFO\] \[wbe\] 启动完成/);
   assert.match(text, /\[ERROR\] \[wbe\] 保存失败/);
   assert.match(text, /quota exceeded/);

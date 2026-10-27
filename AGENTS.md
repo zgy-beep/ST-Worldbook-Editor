@@ -6,7 +6,7 @@
 ## 项目是什么
 
 SillyTavern 世界书编辑器（Worldbook Editor），以**标准前端扩展**形式运行在世界书（Lorebook）管理上。
-当前版本 `0.9.0`，宿主最低版本 `1.17.0`。
+当前版本 `0.10.0`，宿主最低版本 `1.17.0`。
 
 不是脚本库插件，不要求把代码粘进酒馆助手脚本库。通过 `manifest.json` 声明入口与生命周期钩子，
 由 SillyTavern 扩展管理器加载。
@@ -23,6 +23,7 @@ src/index.js          生命周期：APP_READY 启动、菜单挂载、清理
             ├─ src/ai-prompts.js     AI 消息拼装与 JSON 解析（不依赖运行时，可被 Node 单测）
             ├─ src/jb-presets.js     破限预设/保存校验纯函数（零运行时，可被 Node 单测）
             ├─ src/health-rules.js   体检/关键词触发规则纯函数（零依赖，可被 Node 单测）
+            ├─ src/trigger-sim.js    触发仿真纯函数（主词 + 次要逻辑，依赖 health-rules）
             └─ src/logger.js         诊断日志（零 import 叶子模块，可被 Node 单测；index/runtime/editor 共用）
 ```
 
@@ -155,6 +156,15 @@ npm run test:browser
   把模型误输出的 Markdown 表格降级成与 JSON 契约同构的冲突对象（`uid: null`、严重程度中文映射、不提供跳转）；
   `parseAIJSON` 报错会提示「检测到 Markdown 表格」；`CONFLICT_SYS` 末尾追加硬性 JSON 格式要求。
   测试：`test/ai-prompts.test.mjs`（4 条）+ 浏览器冒烟 `conflict-table` 场景 + 降级日志断言。
+- **Wave 2 迭代（2026-10-27）**：
+  - **G03** 触发仿真抽成 `src/trigger-sim.js`（`matchKeyword` / `evaluateSecondary` / `simulateTrigger`，6 条 Node 单测）；
+    工具页展示命中主词 / 次要词与未触发原因，并标注概率 / 递归 / 向量化 / 扫描深度未模拟。
+  - **G09** AI 结果逐字段采纳：`r.accept = { name, keys, content }` + `.aokf` 复选框，`applyAI` 按字段过滤，按钮显示「N 项 / M 字段」。
+  - **G08** 导入先进入 `S.importDraft` 预览（条数 / 前 10 / 同名提示），`importconfirm` 追加写入、`importcancel` 取消；导出勾选优先。
+  - **G11** `S.ai.failed` 记录失败批次，状态栏「重试失败批次」→ `retryFailedAI()` 只补跑失败批次；新建范围支持目标分组 / 位置。
+  - **G04** 编辑区上一条 / 下一条（`goAdjacent`）、`beforeunload` 未保存拦截、移动端 `.wbe-footbar` 吸底。
+  - **A3** 体检孤岛检查改倒排索引 + 惰性计算（`refreshTool(force)`，仅工具页可见时算）。
+  - **A4** `ui-contract` 新增存储红线与 `data-a` ↔ `actions` 一致性守卫；本批测试总数 89。
 
 - **Kit v2.6.0 起复用上游能力**，此前自建的三套临时方案全部退场：
   - 宿主表单隔离 → Kit 内置（`dialog.nvui-tl` + `.nvui-panel` 双载体），

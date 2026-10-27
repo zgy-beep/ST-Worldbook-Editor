@@ -138,7 +138,7 @@ input[type="checkbox"] {
 <div id="extensionsMenu"><button id="extensionsMenuButton">扩展菜单</button></div>
 <script src="/jquery.js"></script><script>
 window.saved = 0; window.calls = []; window.notices = []; window.listeners = new Map();
-window.invalidOnce = true; window.replyKind = 'batch';
+window.invalidOnce = true; window.replyKind = 'batch'; window.failCall = 0;
 window.settings = { unrelated: { keep: true } };
 window.toastr = Object.fromEntries(['info','error','warning','success'].map(k => [k, m => notices.push([k,m])]));
 window.eventBus = {
@@ -166,8 +166,10 @@ window.TavernHelper = {
   createWorldbookEntries: async(book, list) => {entries.push(...list.map((e,i)=>({...e,uid:10+i})));return entries;},
   deleteWorldbookEntries: async(book, fn) => {entries=entries.filter(e=>!fn(e));return {worldbook:entries};},
   generateRaw: async cfg => { calls.push(structuredClone(cfg));
+    if (failCall && calls.length === failCall) throw new Error('mock chunk failure');
     if (invalidOnce) {invalidOnce=false;return '这里是格式错误的说明文字';}
     if (replyKind==='keys') return JSON.stringify({keys:['海港','船舶']});
+    if (replyKind==='fields') return JSON.stringify([{uid:1,name:'港口旧改',content:'潮汐港（AI 改写）'}]);
     if (replyKind==='conflict') return JSON.stringify([{uid:1,severity:'warn',issue:'时间线冲突（冒烟）',details:'与条目 2 的日期矛盾',fix_suggestion:'统一年份'}]);
     if (replyKind==='conflict-table') return ['| # | 类型 | 涉及条目/来源 | 严重程度 | 一句话摘要 |','|---|---|---|---|---|','| 1 | 状态冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 致命 | 唐小康条目未提及秦明轩的存在，但何雅婷条目自己承认秦明轩占有过她。 |','| 2 | 关系冲突 | [0] 人物-唐小康 与 [2] 人物-何雅婷 | 中等 | 两人关系描述不一致。 |'].join('\\n');
     if (replyKind==='text') return '港口的灯火沿着海岸延伸。';
@@ -234,6 +236,9 @@ try {
   assert.equal(desktopHeight.inline, '', '面板高度不应被持久化 px 值内联固定');
   assert.ok(desktopHeight.height >= desktopHeight.vh * 0.9,
     `桌面面板高度应 ≥ 90vh，实际 ${desktopHeight.height}/${desktopHeight.vh}`);
+  // G04：编辑区上一条 / 下一条
+  assert.equal(await page.locator('[data-a=preved]').count(), 1, '编辑区应有「上一条」按钮');
+  assert.equal(await page.locator('[data-a=nexted]').count(), 1, '编辑区应有「下一条」按钮');
   assert.ok(await page.locator('.nvui-tabs').isVisible());
   assert.equal(await page.locator('.nvui-bottom-nav').isVisible(),false);
   assert.equal(await page.locator('dialog:modal').count(),0);
@@ -351,6 +356,7 @@ try {
   });
   assert.equal(hitRow?.action, 'goto', '触发命中的行应可点击跳转');
   assert.ok(hitRow?.uid, '触发命中的行应带条目 uid');
+  assert.match(await page.locator('#wbe-hits').textContent(), /命中主词/, 'G03 命中行应显示命中关键词');
   await page.locator('#wbe-hits .wbe-hitrow').first().click();
   await page.waitForFunction(() => document.querySelector('#wbe-ebody [name=name]')?.value === '港口');
   await page.evaluate(()=>{ replyKind='batch'; });
@@ -380,7 +386,7 @@ try {
     });
     log.error('日志冒烟-error', new Error('smoke-boom'));
     window.dispatchEvent(new ErrorEvent('error', { message: '日志冒烟-未捕获', error: new Error('uncaught-boom') }));
-    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.9.0' } }) };
+    return { count: log.getEntries().length, text: log.exportText({ env: { 扩展版本: '0.10.0' } }) };
   });
   assert.ok(logProbe.count >= 5, `诊断日志应包含生命周期日志，实际 ${logProbe.count} 条`);
   assert.match(logProbe.text, /日志冒烟-未捕获/);
@@ -592,6 +598,82 @@ try {
   await page.locator('[data-a=seldrop]').click();
   await page.locator('[data-a=save]').click();
   await page.waitForFunction(()=>entries[0].strategy.keys.includes('海港'));
+
+  // G04：未保存时刷新 / 关闭页面必须被 beforeunload 拦截
+  await page.locator('#wbe-tab-entries').click();
+  const dirtyProbe = await page.evaluate(() => {
+    const name = document.querySelector('#wbe-ebody [name=name]');
+    if (!name) return { ok: false };
+    name.value = '港口（脏检查）';
+    name.dispatchEvent(new Event('input', { bubbles: true }));
+    const ev = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev);
+    return { ok: true, prevented: ev.defaultPrevented };
+  });
+  assert.ok(dirtyProbe.ok && dirtyProbe.prevented, '有未保存修改时刷新应被 beforeunload 拦截');
+  await page.locator('#wbe-ebody [name=name]').fill('港口');
+  await page.locator('[data-a=save]').click();
+  await page.waitForFunction(() => document.querySelector('#wbe-dot')?.hidden);
+
+  // G09：AI 建议逐字段采纳（拒绝标题、只收正文）
+  await page.evaluate(() => { replyKind = 'fields'; });
+  await page.locator('#wbe-tab-ai').click();
+  await page.locator('[data-a=atgl][data-k=name]').click();
+  await page.locator('[name=instr]').fill('只改正文');
+  await page.locator('[data-a=aigo]').click();
+  await page.locator('[data-a=aiapply]').waitFor();
+  assert.match(await page.locator('[data-a=aiapply]').textContent(), /2 字段/, '标题+正文应识别为 2 个可采纳字段');
+  await page.locator('.aokf[data-f=name]').first().uncheck();
+  assert.match(await page.locator('[data-a=aiapply]').textContent(), /1 字段/);
+  await page.locator('[data-a=aiapply]').click();
+  await page.waitForFunction(() => entries[0].content.includes('AI 改写'));
+  const fieldsApplied = await page.evaluate(() => ({ name: entries[0].name, content: entries[0].content }));
+  assert.equal(fieldsApplied.name, '港口', '未勾选标题时不得改写标题');
+  assert.match(fieldsApplied.content, /AI 改写/);
+
+  // G11：分批失败保留已成功批次，并可只重试失败批次
+  await page.locator('#wbe-tab-entries').click();
+  await page.locator('[data-a=selall]').click();
+  await page.locator('#wbe-tab-ai').click();
+  await page.locator('[name=scope]').selectOption('sel');
+  await page.locator('[name=instr]').fill('批量润色');
+  const callBase = await page.evaluate(() => calls.length);
+  await page.evaluate(n => { failCall = n + 2; }, callBase);
+  await page.locator('[data-a=aigo]').click();
+  await page.locator('[data-a=aicretry]').waitFor({ timeout: 30000 });
+  const failedState = await page.evaluate(() => ({
+    status: document.querySelector('#wbe-ai-out .nvui-hint')?.textContent || '',
+    cards: document.querySelectorAll('#wbe-ai-out .wbe-card').length,
+  }));
+  assert.match(failedState.status, /批失败/, '失败批次应在状态里可见');
+  assert.ok(failedState.cards > 0, '失败前已完成的批次结果应保留');
+  await page.evaluate(() => { failCall = 0; });
+  await page.locator('[data-a=aicretry]').click();
+  await page.waitForFunction(() => /重试完成/.test(document.querySelector('#wbe-ai-out')?.textContent || ''));
+  assert.ok(await page.evaluate(n => calls.length >= n + 2, callBase), '重试应只补跑失败批次');
+  await page.locator('#wbe-tab-entries').click();
+  await page.locator('[data-a=clrsel]').click();
+  await page.locator('#wbe-tab-ai').click();
+  await page.evaluate(() => { replyKind = 'batch'; });
+
+  // G08：导入先预览、确认后追加（不提供覆盖策略）
+  await page.locator('#wbe-tab-entries').click();
+  const [importChooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.locator('[data-a=import]').click(),
+  ]);
+  await importChooser.setFiles({
+    name: '额外条目.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify([{ name: '导入条目A', content: '导入内容', keys: ['导入'] }])),
+  });
+  await page.locator('#wbe-import-preview').waitFor();
+  assert.match(await page.locator('#wbe-import-preview').textContent(), /待导入 1 条/);
+  assert.match(await page.locator('#wbe-import-preview').textContent(), /导入条目A/);
+  const importBefore = await page.evaluate(() => entries.length);
+  await page.locator('[data-a=importconfirm]').click();
+  await page.waitForFunction(before => entries.length === before + 1, importBefore);
+  await page.waitForFunction(() => (document.querySelector('#wbe-import-preview')?.textContent || '') === '');
   await page.locator('#wbe-tab-ai').click();
 
   await page.locator('.nvui-theme-toggle').click();
@@ -688,6 +770,9 @@ try {
   const mobile = await page.locator('.nvui-panel').boundingBox();
   assert.ok(mobile.x>=0 && mobile.x+mobile.width<=391);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  // G04：移动端保存栏吸底
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('.wbe-footbar')).position), 'sticky',
+    '移动端编辑区保存栏应吸底');
   await page.screenshot({path:resolve(root,'.test-output/mobile.png')});
 
   // 回归：移动端单栏下，选中条目后编辑区标题栏必须进入可视区（revealEditTop 生效）。
