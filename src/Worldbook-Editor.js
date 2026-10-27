@@ -1,7 +1,8 @@
-// 世界书编辑器 v0.9.0 · SillyTavern 标准扩展业务模块
+// 世界书编辑器 v0.10.0 · SillyTavern 标准扩展业务模块
 import { buildMessages, parseAIJSON, parseConflictTable } from './ai-prompts.js';
 import { classifyKeyword, isRedosPattern } from './health-rules.js';
 import { getLogger } from './logger.js';
+import { simulateTrigger } from './trigger-sim.js';
 import { createWorldbookApi } from './worldbook-api.js';
 import {
   BUILTIN_JB_PRESETS,
@@ -103,14 +104,19 @@ export function initializeEditor(runtime) {
   ];
   const S = {
     books: [], book: '', entries: [], sel: null, checked: new Set(), q: '', flt: 'all', groupFlt: 'all', sort: 'idx', tab: 'entries', view: 'edit', dirty: false, undo: [], models: [],
-    tool: { find: '', rep: '', re: false, probe: '', f: { content: true, keys: false, name: false }, aiConflicts: [], conflictSrc: null },
-    ai: { instr: '', scope: 'cur', f: { content: true, keys: true, name: false }, ctx: true, results: [], busy: false, cancel: false, status: '' },
+    importDraft: null,
+    tool: { find: '', rep: '', re: false, probe: '', f: { content: true, keys: false, name: false }, aiConflicts: [], conflictSrc: null, healthStale: true },
+    ai: {
+      instr: '', scope: 'cur', f: { content: true, keys: true, name: false }, ctx: true,
+      results: [], busy: false, cancel: false, status: '', failed: [],
+      newGroup: '', newPos: 'after_character_definition',
+    },
     jbPresetSel: '',
   };
   // 破限预设的内联表单状态，只存在内存里，不写入设置
   const jbPresetUi = { mode: '', name: '', error: '', targetId: '', pending: null };
   let root = null, panel = null, closeBtnEl = null, built = false;
-  let capKey = null, capClick = null;
+  let capKey = null, capClick = null, beforeUnloadHandler = null;
   let qTimer = null, dragCleanup = null;
   const CFG = runtime.getSettings();
   // 「设置 → 诊断日志 → 详细日志」开关：debug 打开才记录请求元信息等细节
@@ -314,16 +320,6 @@ export function initializeEditor(runtime) {
   const tokE = e => { let v = TK.get(e); if (v == null) TK.set(e, (v = tok(e.content))); return v; };
   const cur = () => S.entries.find(e => String(e.uid) === String(S.sel));
   const picked = () => S.entries.filter(e => S.checked.has(e.uid));
-  const hit = (k, t, tLower) => {
-    if (!k || !t) return false;
-    const m = k.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (!m) return (tLower !== undefined ? tLower : t.toLowerCase()).includes(k.toLowerCase());
-    if (isRedosPattern(m[1])) {
-      log.warn('拦截潜在 ReDoS 高危正则', { pattern: m[1] });
-      return false;
-    }
-    try { return new RegExp(m[1], m[2]).test(t); } catch { return false; }
-  };
   const guard = () => !S.dirty || confirm('有未保存的修改，确定放弃？');
   const setDirty = v => { S.dirty = v; $('#wbe-dot', root).prop('hidden', !v); };
   const askNum = l => { const v = prompt(l); return v === null || v.trim() === '' || isNaN(+v) ? null : +v; };
@@ -556,13 +552,24 @@ ${GUIDE}
     if (c.length) out.push(c);
     return out;
   }
+  /** 把一条 AI 返回的条目映射成结果对象（G09：带字段级采纳状态）。 */
+  function makeResult(entry, changed) {
+    return { uid: entry.uid, ok: true, ch: changed, accept: { name: true, keys: true, content: true } };
+  }
+  /** 重新计算「应用所选」按钮上的条数 / 字段数。 */
+  function syncApplyCount() {
+    const ok = S.ai.results.filter(result => result.ok);
+    const fields = ok.reduce((sum, result) => sum + Object.keys(result.accept || {}).filter(key => result.accept[key] && result.ch && result.ch[key] !== undefined).length, 0);
+    $('[data-a=aiapply]', root).text(`应用所选（${ok.length} 项 / ${fields} 字段）`);
+  }
   async function runAI() {
-    const a = S.ai, f = Object.keys(a.f).filter(k => a.f[k]), mkNew = a.scope === 'new';    if (!a.instr.trim()) return toast.warning('请先写下修改指令');
+    const a = S.ai, f = Object.keys(a.f).filter(k => a.f[k]), mkNew = a.scope === 'new';
+    if (!a.instr.trim()) return toast.warning('请先写下修改指令');
     const targets = a.scope === 'cur' ? (cur() ? [cur()] : []) : a.scope === 'sel' ? picked() : a.scope === 'all' ? S.entries : [];
     if (!mkNew && !targets.length) return toast.warning('没有可修改的条目：请先选中或勾选条目');
     if (!mkNew && !f.length) return toast.warning('请至少勾选一个允许修改的字段');
     if (targets.length > 30 && !confirm(`将分批处理 ${targets.length} 条，会多次调用 AI，继续？`)) return;
-    a.busy = true; a.cancel = false; a.results = []; a.status = '准备中…'; a.book = S.book; renderAI();
+    a.busy = true; a.cancel = false; a.results = []; a.failed = []; a.status = '准备中…'; a.book = S.book; renderAI();
     logAI.info('AI 批量开始', { scope: a.scope, targets: targets.length, fields: f });
     const brief = S.entries.slice(0, 150).map(e => `- [${e.uid}] ${A.name(e)} | ${A.keys(e).join(', ')}`).join('\n');
     const ctx = a.ctx && brief ? `\n\n【世界书现有条目（仅供参考，不要输出它们）】\n${brief}` : '';
@@ -570,39 +577,93 @@ ${GUIDE}
       if (mkNew) {
         a.status = '生成中…'; renderAI();
         for (const o of await askJSON(NEW_SYS, `【指令】${a.instr}${ctx}${a.ctx ? styleRef([]) : ''}`))
-          if (o && (o.content || o.name)) a.results.push({ uid: null, ok: true, data: { name: String(o.name || '新条目'), keys: norm.keys(o.keys), content: String(o.content || ''), type: o.type } });
+          if (o && (o.content || o.name)) a.results.push({ uid: null, ok: true, data: { name: String(o.name || '新条目'), keys: norm.keys(o.keys), content: String(o.content || ''), type: o.type }, accept: { name: true, keys: true, content: true } });
       } else {
         const parts = chunks(targets);
         for (let i = 0; i < parts.length && !a.cancel; i++) {
           a.status = `处理中 ${i + 1}/${parts.length}…`; renderAI();
           const payload = parts[i].map(e => ({ uid: e.uid, name: A.name(e), keys: A.keys(e), content: e.content }));
-          const out = await askJSON(editSys(f), `【指令】${a.instr}${ctx}${a.ctx ? styleRef(parts[i].map(x => x.uid)) : ''}\n\n【待修改条目】\n${JSON.stringify(payload)}`);
-          for (const o of out) {
-            const e = parts[i].find(x => x.uid === +o?.uid); if (!e) continue;
-            const ch = {};
-            if (f.includes('name') && o.name != null && String(o.name) !== A.name(e)) ch.name = String(o.name);
-            if (f.includes('keys') && o.keys != null && norm.keys(o.keys).join('\n') !== A.keys(e).join('\n')) ch.keys = norm.keys(o.keys);
-            if (f.includes('content') && o.content != null && String(o.content) !== (e.content || '')) ch.content = String(o.content);
-            if (Object.keys(ch).length) a.results.push({ uid: e.uid, ok: true, ch });
+          try {
+            const out = await askJSON(editSys(f), `【指令】${a.instr}${ctx}${a.ctx ? styleRef(parts[i].map(x => x.uid)) : ''}\n\n【待修改条目】\n${JSON.stringify(payload)}`);
+            for (const o of out) {
+              const e = parts[i].find(x => x.uid === +o?.uid); if (!e) continue;
+              const ch = {};
+              if (f.includes('name') && o.name != null && String(o.name) !== A.name(e)) ch.name = String(o.name);
+              if (f.includes('keys') && o.keys != null && norm.keys(o.keys).join('\n') !== A.keys(e).join('\n')) ch.keys = norm.keys(o.keys);
+              if (f.includes('content') && o.content != null && String(o.content) !== (e.content || '')) ch.content = String(o.content);
+              if (Object.keys(ch).length) a.results.push(makeResult(e, ch));
+            }
+          } catch (err) {
+            if (a.cancel) break;
+            // G11：单批失败不丢弃已完成的批次，记录下来等待「重试失败批次」
+            a.failed.push({ uids: parts[i].map(x => x.uid), error: err.message || String(err) });
+            logAI.warn('AI 分批失败，已保留其它批次结果', { batch: i + 1, total: parts.length, error: err });
+            if (parts.length === 1) throw err;
           }
         }
       }
-      a.status = a.cancel ? '已取消' : a.results.length ? `完成：${a.results.length} 项建议，请检查后应用` : '完成：AI 没有给出任何修改';
+      if (a.cancel) a.status = '已取消';
+      else if (a.failed.length) a.status = `完成：${a.results.length} 项建议；${a.failed.length} 批失败（可重试失败批次）`;
+      else a.status = a.results.length ? `完成：${a.results.length} 项建议，请检查后应用` : '完成：AI 没有给出任何修改';
     } catch (err) { logAI.error('AI 调用失败', { scope: a.scope, error: err }); a.status = ''; toast.error('AI 调用失败：' + (err.message || err)); }
+    a.busy = false; renderAI();
+  }
+  async function retryFailedAI() {
+    const a = S.ai;
+    if (a.busy || !a.failed.length) return;
+    if (a.book && a.book !== S.book) return toast.warning('当前世界书已切换，无法重试此前失败的建议');
+    const f = Object.keys(a.f).filter(k => a.f[k]);
+    a.busy = true; a.status = `重试 ${a.failed.length} 批失败…`; renderAI();
+    const failed = a.failed.slice();
+    let succeeded = 0;
+    for (const batch of failed) {
+      const items = S.entries.filter(e => batch.uids.some(uid => String(uid) === String(e.uid)));
+      if (!items.length) { a.failed = a.failed.filter(item => item !== batch); continue; }
+      const payload = items.map(e => ({ uid: e.uid, name: A.name(e), keys: A.keys(e), content: e.content }));
+      try {
+        const out = await askJSON(editSys(f), `【指令】${a.instr}${a.ctx ? styleRef(items.map(x => x.uid)) : ''}\n\n【待修改条目】\n${JSON.stringify(payload)}`);
+        for (const o of out) {
+          const e = items.find(x => x.uid === +o?.uid); if (!e) continue;
+          const ch = {};
+          if (f.includes('name') && o.name != null && String(o.name) !== A.name(e)) ch.name = String(o.name);
+          if (f.includes('keys') && o.keys != null && norm.keys(o.keys).join('\n') !== A.keys(e).join('\n')) ch.keys = norm.keys(o.keys);
+          if (f.includes('content') && o.content != null && String(o.content) !== (e.content || '')) ch.content = String(o.content);
+          if (Object.keys(ch).length) a.results.push(makeResult(e, ch));
+        }
+        a.failed = a.failed.filter(item => item !== batch);
+        succeeded += 1;
+      } catch (err) {
+        batch.error = err.message || String(err);
+        logAI.warn('AI 失败批次重试仍失败', { uids: batch.uids, error: err });
+      }
+    }
+    a.status = a.failed.length ? `重试完成：${succeeded} 批成功，${a.failed.length} 批仍失败` : `重试完成：${succeeded} 批成功`;
     a.busy = false; renderAI();
   }
   async function applyAI() {
     if (S.ai.book && S.ai.book !== S.book) return toast.warning('当前世界书已切换，无法应用此前生成的建议');
     const ok = S.ai.results.filter(r => r.ok);
     if (!ok.length) return toast.warning('没有选中任何建议');
-    const edits = ok.filter(r => r.uid != null).map(r => { const e = S.entries.find(x => x.uid === r.uid); return e && patch(e, r.ch); }).filter(Boolean);
-    const adds = ok.filter(r => r.uid == null).map(r => mk(r.data));
-    await act(`已应用 ${ok.length} 项`, async () => {
+    const pick = (r, key) => (r.accept ? r.accept[key] !== false : true);
+    const edits = ok.filter(r => r.uid != null).map(r => {
+      const e = S.entries.find(x => x.uid === r.uid);
+      if (!e) return null;
+      const ch = {};
+      if (pick(r, 'name') && r.ch.name !== undefined) ch.name = r.ch.name;
+      if (pick(r, 'keys') && r.ch.keys !== undefined) ch.keys = r.ch.keys;
+      if (pick(r, 'content') && r.ch.content !== undefined) ch.content = r.ch.content;
+      return Object.keys(ch).length ? patch(e, ch) : null;
+    }).filter(Boolean);
+    const adds = ok.filter(r => r.uid == null)
+      .map(r => mk({ ...r.data, group: S.ai.newGroup || undefined, pos: S.ai.newPos || undefined }));
+    if (!edits.length && !adds.length) return toast.warning('所选字段都被排除，没有可应用的内容');
+    const fields = ok.reduce((sum, r) => sum + (r.ch ? ['name', 'keys', 'content'].filter(key => r.ch[key] !== undefined && pick(r, key)).length : 0), 0);
+    await act(`已应用 ${ok.length} 项 / ${fields} 字段`, async () => {
       if (edits.length) await apiSetEntries(S.book, edits);
       if (adds.length) await apiCreateEntries(S.book, adds);
     });
-    logAI.info('AI 建议已应用', { edits: edits.length, adds: adds.length, scope: S.ai.scope });
-    S.ai.results = []; S.ai.status = ''; renderAI();
+    logAI.info('AI 建议已应用', { edits: edits.length, adds: adds.length, fields, scope: S.ai.scope });
+    S.ai.results = []; S.ai.failed = []; S.ai.status = ''; renderAI();
   }
   function diff(a, b) {
     a = String(a ?? ''); b = String(b ?? '');
@@ -621,29 +682,54 @@ ${GUIDE}
   }
   function card(r, i) {
     const e = r.uid != null ? S.entries.find(x => x.uid === r.uid) : null, d = r.ch || r.data;
+    const acc = r.accept || (r.accept = { name: true, keys: true, content: true });
+    const fieldBox = (field, label, inner) => `<div class="wbe-ff"><label class="wbe-ln wbe-ffhead"><input type="checkbox" class="nvui-checkbox aokf" data-i="${i}" data-f="${field}" ${acc[field] !== false ? 'checked' : ''}> 采纳「${label}」</label>${inner}</div>`;
     let body = '';
     if (e) {
-      if (d.name != null) body += `<div class="wbe-ln">标题：<s>${esc(A.name(e))}</s> → <b>${esc(d.name)}</b></div>`;
-      if (d.keys) body += `<div class="wbe-ln">关键词：<s>${esc(A.keys(e).join(', '))}</s> → <b>${esc(norm.keys(d.keys).join(', '))}</b></div>`;
-      if (d.content != null) body += `<div class="wbe-diff">${diff(e.content || '', d.content)}</div>`;
+      if (d.name != null) body += fieldBox('name', '标题', `<div class="wbe-ln">标题：<s>${esc(A.name(e))}</s> → <b>${esc(d.name)}</b></div>`);
+      if (d.keys) body += fieldBox('keys', '关键词', `<div class="wbe-ln">关键词：<s>${esc(A.keys(e).join(', '))}</s> → <b>${esc(norm.keys(d.keys).join(', '))}</b></div>`);
+      if (d.content != null) body += fieldBox('content', '内容', `<div class="wbe-diff">${diff(e.content || '', d.content)}</div>`);
     } else body = `<div class="wbe-ln">关键词：${esc(norm.keys(d.keys).join(', ') || '—')}</div><div class="wbe-diff">${esc(d.content)}</div>`;
-    return `<div class="wbe-card"><label class="wbe-ahd"><input type="checkbox" class="aok" data-i="${i}" ${r.ok ? 'checked' : ''}><span class="nvui-badge ${e ? 'is-warn' : 'is-success'}">${e ? '修改' : '新增'}</span><b>${esc(e ? A.name(e) : d.name)}</b></label><details open><summary>查看改动</summary>${body}</details></div>`;
+    return `<div class="wbe-card"><label class="wbe-ahd"><input type="checkbox" class="aok" data-i="${i}" ${r.ok ? 'checked' : ''}><span class="nvui-badge ${e ? 'is-warn' : 'is-success'}">${e ? '修改' : '新增'}</span><b>${esc(e ? A.name(e) : d.name)}</b></label>` +
+      (e ? '<div class="nvui-hint">可逐字段勾选要采纳的改动</div>' : '') +
+      `<details open><summary>查看改动</summary>${body}</details></div>`;
   }
   function renderAI() {
     const a = S.ai, rs = a.results, out = $('#wbe-ai-out', root);
     if (!out.length) return;
+    const ok = rs.filter(r => r.ok);
+    const fields = ok.reduce((sum, r) => sum + (r.ch ? ['name', 'keys', 'content'].filter(key => r.ch[key] !== undefined && (!r.accept || r.accept[key] !== false)).length : 0), 0);
+    const failedBar = a.failed.length && !a.busy
+      ? `<div class="nvui-alert is-warn"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><span>有 ${a.failed.length} 个批次失败：${esc(a.failed.map(item => item.error || '未知错误').join('；').slice(0, 180))}</span><button type="button" class="nvui-btn is-sm is-secondary" data-a="aicretry">重试失败批次</button></div>`
+      : '';
     out.html(
       `<div class="wbe-bar">${a.busy ? `<button type="button" class="nvui-btn is-ghost" data-a="aistop">取消</button><span class="nvui-spinner" aria-hidden="true"></span>` : `<button type="button" class="nvui-btn is-primary" data-a="aigo">${ico('fa-wand-magic-sparkles')}生成修改建议</button>`}<span class="nvui-hint">${esc(a.status)}</span></div>` +
+      failedBar +
       (rs.length && !a.busy
-        ? `<div class="wbe-bar"><button type="button" class="nvui-btn is-primary" data-a="aiapply">应用所选（${rs.filter(r => r.ok).length}）</button><button type="button" class="nvui-btn is-ghost" data-a="aiall">全选 / 取消</button><span class="nvui-hint">应用前自动存快照，可用列表工具栏「撤销」回退</span></div>${rs.map(card).join('')}`
+        ? `<div class="wbe-bar"><button type="button" class="nvui-btn is-primary" data-a="aiapply">应用所选（${ok.length} 项 / ${fields} 字段）</button><button type="button" class="nvui-btn is-ghost" data-a="aiall">全选 / 取消</button><span class="nvui-hint">应用前自动存快照，可用列表工具栏「撤销」回退</span></div>${rs.map(card).join('')}`
         : ''));
   }
   function aiSync(el) {
-    const a = S.ai, n = el.name;
+    const a = S.ai;
+    if (el.classList.contains('aokf')) {
+      const r = a.results[+el.dataset.i]; if (!r) return;
+      r.accept = r.accept || { name: true, keys: true, content: true };
+      r.accept[el.dataset.f] = el.checked;
+      syncApplyCount();
+      return;
+    }
+    if (el.classList.contains('aok')) {
+      const r = a.results[+el.dataset.i]; if (!r) return;
+      r.ok = el.checked;
+      syncApplyCount();
+      return;
+    }
+    const n = el.name;
     if (n === 'instr') a.instr = el.value;
     else if (n === 'scope') a.scope = el.value;
     else if (n === 'ctx') a.ctx = el.checked;
-    else if (el.classList.contains('aok')) { a.results[+el.dataset.i].ok = el.checked; $('[data-a=aiapply]', root).text(`应用所选（${a.results.filter(r => r.ok).length}）`); }
+    else if (n === 'newgroup') a.newGroup = el.value.trim();
+    else if (n === 'newpos') a.newPos = el.value;
   }
   function jbSync(el) {
     const kind = el.dataset.k;
@@ -691,7 +777,7 @@ ${GUIDE}
     let host = null;
     try { host = typeof runtime.getHostInfo === 'function' ? runtime.getHostInfo() : null; } catch (err) { host = null; }
     return {
-      扩展版本: '0.9.0',
+      扩展版本: '0.10.0',
       组件库: NVUI && NVUI.version ? `NVUI ${NVUI.version}` : 'NVUI 未加载',
       酒馆版本: host && host.version ? host.version : '未知',
       当前世界书: S.book || '（未选择）',
@@ -769,7 +855,7 @@ ${GUIDE}
     const c = CFG;
     const modeBtn = v => `<button type="button" class="nvui-btn is-sm${c.mode === v ? ' is-secondary' : ''}" data-a="smode" data-v="${v}" aria-pressed="${c.mode === v}">${v === 'st' ? '酒馆当前连接的 API' : '自定义 API（OpenAI 兼容）'}</button>`;
     const row = (l, i) => `<label class="nvui-input-row">${i}<span>${l}</span></label>`;
-    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.9.0</span></div>
+    return `<div class="nvui-panel-heading"><span class="nvui-section-title">设置</span><span class="nvui-badge">v0.10.0</span></div>
       <div class="nvui-acc is-open" id="wbe-acc-api">
         <button type="button" class="nvui-acc-head" aria-expanded="true"><span class="nvui-acc-title">${ico('fa-plug')}接口</span><span class="nvui-acc-summary" id="wbe-modesum">${c.mode === 'custom' ? esc(c.model || '自定义 API') : '酒馆当前 API'}</span><i class="nvui-acc-chev" aria-hidden="true"></i></button>
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
@@ -859,7 +945,7 @@ ${GUIDE}
         <div class="nvui-acc-body"><div class="nvui-acc-inner">
           ${field('聊天文本', `<textarea class="nvui-input wbe-probe" name="probe" placeholder="粘贴一段聊天文本，看会触发哪些条目">${esc(t.probe)}</textarea>`)}
           <div id="wbe-hits"></div>
-          <p class="nvui-hint">只按常驻和主关键词判断，不含次要关键词、递归、概率。</p>
+          <p class="nvui-hint">按「常驻 / 主关键词 + 次要逻辑」模拟，并列出命中词与未触发原因；实际概率掷骰、递归、向量相似度、扫描深度不模拟。</p>
         </div></div>
       </div>
       <div class="nvui-acc is-open" id="wbe-acc-health">
@@ -901,8 +987,20 @@ ${GUIDE}
     const uidMap = new Map(S.entries.map(e => [e.uid, e]));
     const nameOf = u => A.name(uidMap.get(u)) || '（无标题）';
     const commonWords = new Set(['他', '她', '它', '他们', '这个', '那个', '因为', '并且', '你', '我', 'the', 'this', 'that', 'he', 'she', 'it']);
-    const contentsLower = S.entries.map(e => (e.content || '').toLowerCase());
-    S.entries.forEach((e, idx) => {
+    // A3：预建「关键词 → 哪些条目的正文提到它」倒排索引，把孤岛检查从 O(E²·K) 降到 O(E·K)
+    const mentions = new Map();
+    S.entries.forEach(entry => {
+      const content = (entry.content || '').toLowerCase();
+      if (!content) return;
+      A.keys(entry).forEach(key => {
+        const lower = key.toLowerCase();
+        if (!lower) return;
+        const set = mentions.get(lower) || new Set();
+        if (content.includes(lower)) set.add(entry.uid);
+        mentions.set(lower, set);
+      });
+    });
+    S.entries.forEach(e => {
       if (!A.enabled(e)) return;
       const n = A.name(e) || '（无标题）', t = A.type(e), k = tokE(e), keys = A.keys(e);
       if (!(e.content || '').trim()) out.push([e.uid, '内容为空', n, 'danger']);
@@ -919,8 +1017,8 @@ ${GUIDE}
       if (dangerous.length && !A.keysSec(e).length) out.push([e.uid, `含高危泛用词「${dangerous.join('、')}」，容易误触，建议配置次要关键词`, n, 'danger']);
       if (t !== 'constant' && keys.length) {
         const isMentioned = keys.some(x => {
-          const xLower = x.toLowerCase();
-          return contentsLower.some((c, j) => j !== idx && c.includes(xLower));
+          const set = mentions.get(x.toLowerCase());
+          return !!set && [...set].some(uid => String(uid) !== String(e.uid));
         });
         if (!isMentioned) {
           out.push([e.uid, '孤岛设定：该条目的触发词未被任何其他条目正文提及，可能无法级联触发', n, 'info']);
@@ -937,9 +1035,13 @@ ${GUIDE}
     for (const o in om) if (om[o].length > 1) om[o].forEach(u => out.push([u, `order 值重复（${om[o].length} 条），拖拽排序语义可能不稳定`, nameOf(u), 'info']));
     return out;
   }
-  function refreshTool() {
+  function refreshTool(force = false) {
     const healthBox = $('#wbe-health', root);
     if (!healthBox.length) return;
+    // A3：health() 是 O(E·K) 的只读计算，只有工具页可见时才跑；
+    // 其它页面写入后先标记 stale，进入工具页再算（大世界书下避免每次保存都同步体检）。
+    if (!force && S.tab !== 'tool') { S.tool.healthStale = true; return; }
+    S.tool.healthStale = false;
     if (!S.book) {
       // G06：无世界书时不要显示「没有发现明显问题」这种误导性的绿色通过
       $('#wbe-hsum', root).text('等待世界书');
@@ -984,11 +1086,21 @@ ${GUIDE}
   function runTest() {
     const t = $('[name=probe]', root).val() || '';
     S.tool.probe = t;
-    const tLower = t.toLowerCase();
-    const hits = S.entries.filter(e => A.enabled(e) && (A.type(e) === 'constant' || A.keys(e).some(k => k && hit(k, t, tLower)))).sort((a, b) => A.order(b) - A.order(a));
-    $('#wbe-ptsum', root).text(t ? `命中 ${hits.length} 条` : '');
-    $('#wbe-hits', root).html(t ? `<p class="nvui-hint">命中 ${hits.length} 条，约 ${hits.reduce((s, e) => s + tokE(e), 0)} tokens</p>` +
-      hits.map(e => `<div class="wbe-hitrow ${(TYPE[A.type(e)] || [])[1] || ''}" data-a="goto" data-u="${esc(e.uid)}">${esc(A.name(e))} <span class="nvui-muted">#${esc(A.order(e))}</span></div>`).join('') : '');
+    if (!t) { $('#wbe-ptsum', root).text(''); $('#wbe-hits', root).html(''); return; }
+    const view = S.entries.map(e => ({
+      uid: e.uid, name: A.name(e), type: A.type(e), enabled: A.enabled(e),
+      keys: A.keys(e), keysSec: A.keysSec(e), secLogic: A.secLogic(e), prob: A.prob(e), order: A.order(e),
+    }));
+    const { hits, skipped } = simulateTrigger(view, t);
+    const tokenSum = hits.reduce((sum, hit) => { const entry = S.entries.find(item => String(item.uid) === String(hit.uid)); return sum + (entry ? tokE(entry) : 0); }, 0);
+    $('#wbe-ptsum', root).text(`命中 ${hits.length} 条`);
+    const row = hit => `<div class="wbe-hitrow ${(TYPE[hit.type] || [])[1] || ''}" data-a="goto" data-u="${esc(hit.uid)}">
+      <div class="wbe-ln"><b>${esc(hit.name)}</b> <span class="nvui-muted">#${esc(hit.order)}</span> <span class="nvui-hint">${esc(hit.reason)}</span></div>
+      ${hit.matchedKeys.length ? `<div class="nvui-hint">命中主词：${esc(hit.matchedKeys.join('、'))}${hit.matchedSec.length ? `；命中次要词：${esc(hit.matchedSec.join('、'))}` : ''}</div>` : ''}
+    </div>`;
+    $('#wbe-hits', root).html(`<p class="nvui-hint">命中 ${hits.length} 条，约 ${tokenSum} tokens。模拟「主关键词 + 次要逻辑」；实际概率掷骰、递归、向量相似度、扫描深度未模拟。</p>`
+      + hits.map(row).join('')
+      + (skipped.length ? `<details class="wbe-mt-1"><summary class="nvui-hint">${skipped.length} 条未触发（查看原因）</summary>${skipped.map(item => `<div class="nvui-hint">${esc(item.name)}：${esc(item.reason)}</div>`).join('')}</details>` : ''));
   }
 
   // ---------- 拖拽排序 ----------
@@ -1098,6 +1210,23 @@ ${GUIDE}
     $('#wbe-flt', root).val(S.flt); $('#wbe-sort', root).val(S.sort); $('#wbe-tpl', root).val(CFG.tpl || 'blank');
     // G06：没有任何世界书时给显式引导，而不是让用户对空列表猜
     $('#wbe-nobook', root).prop('hidden', S.books.length > 0);
+    renderImportPreview();
+  }
+  /** G08：导入预览卡片（条数 / 前 10 条 / 重名提示 / 确认后追加写入）。 */
+  function renderImportPreview() {
+    const box = $('#wbe-import-preview', root);
+    if (!box.length) return;
+    const draft = S.importDraft;
+    if (!draft || !draft.items.length) { box.html(''); return; }
+    const names = draft.items.map(item => String(item.name ?? item.comment ?? '（无标题）'));
+    const existing = new Set(S.entries.map(entry => A.name(entry)));
+    const dupes = names.filter(name => existing.has(name));
+    const preview = names.slice(0, 10).map(name => `<div class="nvui-hint">· ${esc(name)}${existing.has(name) ? ' <span class="nvui-badge is-warn">同名已存在</span>' : ''}</div>`).join('');
+    box.html(`<div class="wbe-card"><div class="wbe-ahd"><span class="nvui-badge is-accent">导入预览</span><b>待导入 ${draft.items.length} 条</b></div>
+      <div class="nvui-hint">来源：${esc(draft.file)}${dupes.length ? `；其中 ${dupes.length} 条与现有条目同名（按追加处理，不会覆盖）` : ''}</div>
+      ${preview}
+      ${names.length > 10 ? `<div class="nvui-hint">…还有 ${names.length - 10} 条未显示</div>` : ''}
+      <div class="wbe-bar wbe-mt-2"><button type="button" class="nvui-btn is-primary is-sm" data-a="importconfirm">确认导入（追加）</button><button type="button" class="nvui-btn is-ghost is-sm" data-a="importcancel">取消</button></div></div>`);
   }
   function matchQuery(e, q) {
     if (!q) return true;
@@ -1199,7 +1328,7 @@ ${GUIDE}
   function renderEditor() {
     const e = cur(), bar = $('#wbe-ebar', root), body = $('#wbe-ebody', root), foot = $('#wbe-efoot', root);
     bar.html(`<button type="button" class="nvui-icon-btn wbe-back" data-a="back" aria-label="返回列表">${ico('fa-chevron-left')}</button>` +
-      (e ? `<button type="button" class="nvui-btn is-sm${S.view === 'edit' ? ' is-secondary' : ''}" data-a="view" data-v="edit">编辑</button><button type="button" class="nvui-btn is-sm${S.view === 'json' ? ' is-secondary' : ''}" data-a="view" data-v="json">JSON</button>` : ''));
+      (e ? `<button type="button" class="nvui-icon-btn" data-a="preved" aria-label="上一条" title="上一条（Alt+↑）">${ico('fa-chevron-up')}</button><button type="button" class="nvui-icon-btn" data-a="nexted" aria-label="下一条" title="下一条（Alt+↓）">${ico('fa-chevron-down')}</button><button type="button" class="nvui-btn is-sm${S.view === 'edit' ? ' is-secondary' : ''}" data-a="view" data-v="edit">编辑</button><button type="button" class="nvui-btn is-sm${S.view === 'json' ? ' is-secondary' : ''}" data-a="view" data-v="json">JSON</button>` : ''));
     if (!e) { body.html('<div class="nvui-empty">在左侧选择一个条目开始编辑。</div>'); foot.html(''); return; }
     if (S.view === 'json') {
       body.html(`<div class="wbe-form wbe-fedit"><label class="wbe-field"><span>条目 JSON</span><textarea class="nvui-input wbe-big" name="json" spellcheck="false">${esc(JSON.stringify(e, null, 2))}</textarea></label><p class="nvui-hint">可以直接改任何字段，字段名随酒馆助手版本而异。</p></div>`);
@@ -1233,6 +1362,10 @@ ${GUIDE}
       <div class="wbe-grid2">
         ${field('范围', `<select class="nvui-input" name="scope">${sc.map(([k, t]) => `<option value="${k}" ${a.scope === k ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
         <div class="wbe-field"><span>允许 AI 修改</span><div class="wbe-bar">${tgl('content', '内容')}${tgl('keys', '关键词')}${tgl('name', '标题')}</div></div>
+      </div>
+      <div class="wbe-grid2">
+        ${field('新建条目的分组（仅「新建条目」范围）', `<input class="nvui-input" name="newgroup" value="${esc(a.newGroup)}" placeholder="留空 = 未分组">`)}
+        ${field('新建条目的位置（仅「新建条目」范围）', `<select class="nvui-input" name="newpos">${Object.entries(POS).map(([k, v]) => `<option value="${esc(k)}" ${a.newPos === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`)}
       </div>
       <label class="nvui-switch-row wbe-swbare"><input type="checkbox" name="ctx" ${a.ctx ? 'checked' : ''}><span>附带背景：其他条目的标题/关键词，以及 2 个现有条目作为风格参考（更连贯，但多耗 token）</span></label>
       <p class="nvui-hint"><span id="wbe-apihint">当前接口：${CFG.mode === 'custom' ? esc(CFG.model || '自定义（未填模型）') : '酒馆当前连接的 API'}</span> <button type="button" class="nvui-btn is-sm is-ghost" data-a="gset">去设置</button>　AI 的结果不会直接写入，需要你逐项检查后点「应用」。快捷键 Ctrl+Enter 生成。</p>
@@ -1685,9 +1818,21 @@ ${GUIDE}
     // 同 select：只在单栏模式下把编辑区标题栏带入可视范围
     revealEditTop();
   };
+  /** G04：编辑区上一条 / 下一条（按当前筛选后的可见顺序）。 */
+  const goAdjacent = delta => {
+    if (!guard()) return;
+    const list = visible();
+    const index = list.findIndex(item => String(item.uid) === String(S.sel));
+    const target = list[index + delta];
+    if (!target) return toast.info(delta < 0 ? '已经是第一条' : '已经是最后一条');
+    goEdit(target.uid);
+    renderList();
+  };
   const actions = {
     close() { if (guard()) { setDirty(false); panel.close(); } },
     back: () => $('#wbe-md', root).removeClass('show-edit'),
+    preved: () => goAdjacent(-1),
+    nexted: () => goAdjacent(1),
     view(el) { const v = el.data('v'); if (v === S.view) return; if (!guard()) return; setDirty(false); S.view = v; renderEditor(); },
     aicur() { if (!guard()) return; setDirty(false); S.ai.scope = 'cur'; $('[name=scope]', root).val('cur'); activateTab('ai'); },
     aibatch() { if (!guard()) return; setDirty(false); S.ai.scope = 'sel'; $('[name=scope]', root).val('sel'); activateTab('ai'); },
@@ -1900,7 +2045,12 @@ ${GUIDE}
     aigo: runAI,
     aistop() { S.ai.cancel = true; try { getTH().stopAllGeneration?.(); } catch { /* 忽略 */ } },
     aiapply: applyAI,
-    aiall() { const r = S.ai.results, all = r.every(x => x.ok); r.forEach(x => (x.ok = !all)); renderAI(); },
+    aicretry: retryFailedAI,
+    aiall() {
+      const rs = S.ai.results, all = rs.every(r => r.ok);
+      rs.forEach(r => { r.ok = !all; r.accept = { name: !all, keys: !all, content: !all }; });
+      renderAI();
+    },
     undo,
     rmchip(el) { el.closest('.nvui-chip').remove(); setDirty(true); },
     jbapply() {
@@ -1991,19 +2141,23 @@ ${GUIDE}
     },
     export() {
       if (!S.book) return toast.warning('请先选择或新建世界书');
+      const list = S.checked.size ? picked() : S.entries;
+      if (!list.length) return toast.warning('没有可导出的条目');
       const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
       const a = D.createElement('a');
-      a.href = W.URL.createObjectURL(new Blob([JSON.stringify(S.entries, null, 2)], { type: 'application/json' }));
+      a.href = W.URL.createObjectURL(new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' }));
       a.download = `${safeName}.entries.json`; a.click();
-      logIO.info('导出条目（JSON）', { book: S.book || '（未选择）', count: S.entries.length });
+      logIO.info('导出条目（JSON）', { book: S.book || '（未选择）', count: list.length, checked: S.checked.size > 0 });
     },
     exportcsv() {
       if (!S.book) return toast.warning('请先选择或新建世界书');
+      const list = S.checked.size ? picked() : S.entries;
+      if (!list.length) return toast.warning('没有可导出的条目');
       const safeName = (S.book || 'lorebook').replace(/[\\/:*?"<>|]/g, '_');
       const a = D.createElement('a');
-      a.href = W.URL.createObjectURL(new Blob([CSV.stringify(S.entries)], { type: 'text/csv;charset=utf-8;' }));
+      a.href = W.URL.createObjectURL(new Blob([CSV.stringify(list)], { type: 'text/csv;charset=utf-8;' }));
       a.download = `${safeName}.csv`; a.click();
-      logIO.info('导出条目（CSV）', { book: S.book || '（未选择）', count: S.entries.length });
+      logIO.info('导出条目（CSV）', { book: S.book || '（未选择）', count: list.length, checked: S.checked.size > 0 });
     },
     import() {
       if (!S.book) return toast.warning('请先选择或新建世界书，再导入条目');
@@ -2024,10 +2178,25 @@ ${GUIDE}
             arr = arr.filter(r => r && typeof r === 'object').map(r => (r && (r.strategy || r.key !== undefined) ? r : mk(r)));
           }
           if (!arr.length) throw new Error('未读取到任何有效条目');
-          logIO.info('导入条目', { book: S.book || '（未选择）', count: arr.length, file: file.name });
-          await act(`已导入 ${arr.length} 条`, () => apiCreateEntries(S.book, arr.map(({ uid, ...r }) => r)));
-        } catch (err) { logIO.error('导入条目失败', err); toast.error('导入失败：' + err.message); }
+          // G08：先进入预览，确认后才写入（追加模式，可撤销）
+          S.importDraft = { file: file.name, items: arr };
+          renderImportPreview();
+          logIO.info('导入预览', { book: S.book || '（未选择）', count: arr.length, file: file.name });
+        } catch (err) { logIO.error('读取导入文件失败', err); toast.error('导入失败：' + err.message); }
       }).trigger('click');
+    },
+    importconfirm() {
+      const draft = S.importDraft;
+      if (!draft || !draft.items.length || !S.book) return;
+      const items = draft.items;
+      S.importDraft = null;
+      renderImportPreview();
+      void act(`已导入 ${items.length} 条`, () => apiCreateEntries(S.book, items.map(({ uid, ...rest }) => rest)))
+        .then(() => { logIO.info('导入条目', { book: S.book || '（未选择）', count: items.length }); });
+    },
+    importcancel() {
+      S.importDraft = null;
+      renderImportPreview();
     },
     async new() {
       if (!S.book) return toast.warning('请先选择或新建世界书');
@@ -2101,7 +2270,7 @@ ${GUIDE}
     panel = NVUI.createPanel({
       id: 'wbe',
       title: '世界书编辑器',
-      version: 'v0.9.0',
+      version: 'v0.10.0',
       mount: D.body,
       tabs: TABS.map(([key, label, ic]) => ({ key, label, icon: `fa-solid ${ic}` })),
       // Kit 标准：720px 默认宽度 + 固定高度（<=600px 时由 Kit 切为 100% 底部抽屉）
@@ -2159,6 +2328,7 @@ ${GUIDE}
         <div class="wbe-bar"><span class="nvui-hint" id="wbe-count"></span><span class="nvui-grow"></span><button type="button" class="nvui-btn is-sm is-ghost" data-a="undo">${ico('fa-rotate-left')}撤销</button><button type="button" class="nvui-btn is-sm is-ghost" data-a="selall">全选 / 取消</button></div>
         <div id="wbe-hint" class="nvui-hint"></div>
         <div id="wbe-nobook" class="nvui-alert is-warn" hidden><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>还没有世界书：点上方「+」新建一本，然后就可以新建条目或从模板开始。</span></div>
+        <div id="wbe-import-preview"></div>
         <div id="wbe-items" class="wbe-items"></div>
       </div>
       <div class="wbe-edit">
@@ -2203,6 +2373,8 @@ ${GUIDE}
       S.tab = key;
       // 设置页的诊断日志在进入标签时刷新一次（日志只在内存里，重进面板也能看到本次会话记录）
       if (key === 'set') renderLogs();
+      // A3：工具页的体检是惰性计算，进入标签时补算一次
+      if (key === 'tool') refreshTool();
     };
     panel.tabs && panel.tabs.addEventListener('click', onNavGuard, true);
     panel.bottomNav && panel.bottomNav.addEventListener('click', onNavGuard, true);
@@ -2314,11 +2486,14 @@ ${GUIDE}
         ev.preventDefault(); const v = visible(), n = v[v.findIndex(e => e.uid === S.sel) + (ev.key === 'ArrowDown' ? 1 : -1)]; if (n) ev.shiftKey ? commitMove(S.sel, n.uid, ev.key === 'ArrowDown') : select(n.uid);
       } else if (ev.altKey && ev.key.toLowerCase() === 'n') { ev.preventDefault(); actions.new(); }
     });
+    // G04：浏览器刷新 / 关闭前的未保存拦截（面板内关闭仍由 guard() 负责）
+    beforeUnloadHandler = ev => { if (!S.dirty) return; ev.preventDefault(); ev.returnValue = ''; };
+    W.addEventListener('beforeunload', beforeUnloadHandler);
 
     render();
     renderAI();
-    refreshTool();
     S.tab = panel.activeTab || 'entries';
+    refreshTool();
     syncActiveTab();
   }
 
@@ -2355,6 +2530,7 @@ ${GUIDE}
     $(D).off('keydown.wbe');
     if (capKey) { D.removeEventListener('keydown', capKey, true); capKey = null; }
     if (capClick && panel) { panel.dialog.removeEventListener('click', capClick, true); capClick = null; }
+    if (beforeUnloadHandler) { try { W.removeEventListener('beforeunload', beforeUnloadHandler); } catch { /* 忽略 */ } beforeUnloadHandler = null; }
     if (qTimer) { clearTimeout(qTimer); qTimer = null; }
     if (tokTimer) { clearTimeout(tokTimer); tokTimer = null; }
     if (probeTimer) { clearTimeout(probeTimer); probeTimer = null; }
